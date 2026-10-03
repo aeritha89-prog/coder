@@ -1,0 +1,15 @@
+.git
+.venv
+.uv-cache
+.pytest-tmp*
+.pytest_cache
+__pycache__
+*.pyc
+.env
+.env.*
+*.pem
+*.key
+sessions
+outputs
+tests
+docs

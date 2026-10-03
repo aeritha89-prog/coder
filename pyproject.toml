@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "study-coder"
+version = "0.1.0"
+description = "A small, bounded coding agent for learning"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0,<3",
+    "python-dotenv>=1.0,<2",
+    "PyYAML>=6,<7",
+    "tavily>=1.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8", "mypy>=1.10", "types-PyYAML>=6,<7"]
+
+[project.scripts]
+study-coder = "study_coder.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["fixtures", ".venv"]
+addopts = "--basetemp=.pytest-tmp"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".uv-cache", ".pytest-tmp", ".tmp", ".uv-python"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+packages = ["study_coder"]
+check_untyped_defs = true

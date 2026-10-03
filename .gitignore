@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.pytest-tmp/
+.pytest-tmp-*/
+.tmp/
+.uv-cache/
+.uv-python/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+sessions/
+.env
