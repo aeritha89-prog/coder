@@ -1,4 +1,4 @@
-"""命令行入口：构建 Agent、恢复会话并处理单次或交互任务。"""
+"""命令行入口：构建 Agent、恢复会话并运行持续对话。"""
 
 from __future__ import annotations
 
@@ -48,7 +48,6 @@ def _ask(request: PermissionRequest) -> Decision:
 def parser() -> argparse.ArgumentParser:
     """声明运行参数；配置文件中的默认值由 load_settings 提供。"""
     result = argparse.ArgumentParser(prog="study-coder", epilog="Management: study-coder memory --help; study-coder sandbox --help")
-    result.add_argument("-p", "--prompt", help="run one task and exit")
     result.add_argument("-C", "--workspace", type=Path, help="existing workspace directory")
     result.add_argument("--yes", action="store_true", help="preapprove side-effect tools")
     result.add_argument("--model")
@@ -152,7 +151,7 @@ def _memory_command(argv: Sequence[str]) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """装配依赖、执行任务并以退出码表示单次任务结果。"""
+    """装配依赖并进入对话；用户退出后统一保存和导出成果。"""
     raw = list(argv) if argv is not None else sys.argv[1:]
     if raw and raw[0] == "sandbox":
         return _sandbox_command(raw[1:])
@@ -219,7 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             memory_enabled=memory is not None,
             skill_catalog=runtime.skill_catalog),
             policy, settings, runtime=runtime,
-                      mode="one_shot" if args.prompt else "interactive", context=context,
+                      mode="interactive", context=context,
                       history_checkpoint=checkpoint, model_activity=model_activity, memory=memory)
         if args.session and session_path(session_root, args.session).exists():
             # 原始历史与短期覆盖边界一起恢复；不恢复旧进程和上次授权。
@@ -293,18 +292,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Sandbox export failed: {exc}", file=sys.stderr)
             return 1
 
-    if args.prompt:
-        return finish(run(args.prompt))
-    # 未传 -p 时进入交互循环，空行不会产生一轮模型请求。
+    # 每轮只结束当前任务，不关闭容器；最后一轮的结果参与对话退出码。
+    last_code = 0
     print(f"study-coder in {settings.workspace} | /help for commands")
     while True:
         try:
             line = input("study-coder> ").strip()
         except (KeyboardInterrupt, EOFError):
             print()
-            return finish(0)
+            return finish(last_code)
         if line in {"exit", "quit"}:
-            return finish(0)
+            return finish(last_code)
         if line == "/help":
             print("/help  /clear (working/short-term only)  /tokens  /memory [query]  /forget ID  exit")
         elif line == "/clear":
@@ -329,4 +327,4 @@ def main(argv: Sequence[str] | None = None) -> int:
             except (ValueError, OSError, sqlite3.Error) as exc:
                 print(f"Memory error: {exc}", file=sys.stderr)
         elif line:
-            run(line)
+            last_code = run(line)

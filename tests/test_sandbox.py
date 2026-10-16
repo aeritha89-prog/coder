@@ -269,4 +269,4 @@ def test_cli_docker_selection_does_not_fall_back_to_local(
     monkeypatch.setattr("study_coder.cli.OpenAICompatibleModel",
                         lambda *args, **kwargs: pytest.fail("model started after failed doctor"))
     monkeypatch.chdir(workspace)
-    assert main(["-C", str(workspace), "-p", "hello"]) == 2
+    assert main(["-C", str(workspace)]) == 2

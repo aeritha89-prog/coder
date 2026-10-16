@@ -27,7 +27,7 @@ class Agent:
     """按轮次调用模型；每条工具请求都得到匹配的结果消息。"""
 
     def __init__(self, model: ChatModel, tools: ToolRegistry, permission: PermissionPolicy,
-                 settings: Settings, runtime: WorkspaceRuntime, mode: Mode = "one_shot",
+                 settings: Settings, runtime: WorkspaceRuntime, mode: Mode = "interactive",
                  context: ContextManager | None = None,
                  system_prompt: str = SYSTEM_PROMPT,
                  history_checkpoint: Callable[[list[Message]], None] | None = None,

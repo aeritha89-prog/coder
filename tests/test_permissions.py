@@ -8,7 +8,8 @@ def test_plan_denies_even_when_session_allowed() -> None:
     assert policy.decide(PermissionRequest("edit_file", {}, "plan")) == "deny"
 
 
-def test_one_shot_requires_yes() -> None:
-    request = PermissionRequest("bash", {"command": "python -m pytest"}, "one_shot")
+def test_interactive_requires_permission_callback_or_yes() -> None:
+    request = PermissionRequest("bash", {"command": "python -m pytest"}, "interactive")
     assert DefaultPermissionPolicy().decide(request) == "deny"
     assert DefaultPermissionPolicy(yes=True).decide(request) == "allow_once"
+    assert DefaultPermissionPolicy(ask=lambda _: "allow_once").decide(request) == "allow_once"

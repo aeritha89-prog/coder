@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Protocol
 
-Mode = Literal["interactive", "one_shot", "plan"]
+Mode = Literal["interactive", "plan"]
 Decision = Literal["allow_once", "allow_session", "deny"]
 
 
@@ -40,7 +40,7 @@ class DefaultPermissionPolicy:
             return "deny"
         if request.tool_name in self._session_allowed or self.yes:
             return "allow_once"
-        if request.mode == "one_shot" or self.ask is None:
+        if self.ask is None:
             return "deny"
         decision = self.ask(request)
         if decision == "allow_session":

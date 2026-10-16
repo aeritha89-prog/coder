@@ -69,7 +69,9 @@ def test_cli_incomplete_reply_is_shown_once(
         return StreamingModel([LLMReply(text, Message("assistant", text))])
 
     monkeypatch.setattr(cli, "OpenAICompatibleModel", fake_model)
-    args = ["-C", str(workspace), "-p", "build an app", "--max-rounds", "1"]
+    inputs = iter(["build an app", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    args = ["-C", str(workspace), "--max-rounds", "1"]
     if stream:
         args.append("--stream")
     assert main(args) == 1
@@ -91,12 +93,12 @@ def test_config_and_cli(workspace: Path, tmp_path: Path, capsys: pytest.CaptureF
     with pytest.raises(SystemExit) as help_exit:
         main(["--help"])
     assert help_exit.value.code == 0
-    assert main(["-C", str(workspace / "missing"), "-p", "hi"]) == 2
-    assert main(["-C", str(workspace), "--max-rounds", "0", "-p", "hi"]) == 2
+    assert main(["-C", str(workspace / "missing")]) == 2
+    assert main(["-C", str(workspace), "--max-rounds", "0"]) == 2
     monkeypatch.delenv("STUDY_CODER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("STUDY_CODER_BASE_URL", "https://example.test/v1")
-    assert main(["-C", str(workspace), "-p", "hi"]) == 2
+    assert main(["-C", str(workspace)]) == 2
     assert "API key required" in capsys.readouterr().err
 
 
@@ -105,7 +107,7 @@ def test_local_backend_is_rejected(workspace: Path) -> None:
         load_settings({"STUDY_CODER_WORKSPACE": str(workspace),
                        "STUDY_CODER_EXECUTION_BACKEND": "local"})
     with pytest.raises(SystemExit) as failure:
-        main(["--sandbox", "local", "-p", "hello"])
+        main(["--sandbox", "local"])
     assert failure.value.code == 2
 
 
@@ -149,7 +151,9 @@ def test_cli_reads_dotenv_and_cli_wins(workspace: Path, tmp_path: Path,
         return ScriptedLLM([LLMReply("done", Message("assistant", "done"))])
 
     monkeypatch.setattr(cli, "OpenAICompatibleModel", fake_model)
-    assert main(["-C", str(workspace), "--model", "cli-model", "-p", "hello"]) == 0
+    inputs = iter(["hello", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    assert main(["-C", str(workspace), "--model", "cli-model"]) == 0
     assert captured[0].api_key == "file-key"
     assert captured[0].model == "cli-model"
 
@@ -173,7 +177,9 @@ def test_cli_prints_tool_counts_after_each_task(
         ])
 
     monkeypatch.setattr(cli, "OpenAICompatibleModel", fake_model)
-    args = ["-C", str(workspace), "-p", "inspect"]
+    inputs = iter(["inspect", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    args = ["-C", str(workspace)]
     if stream:
         args.append("--stream")
     assert main(args) == 0
@@ -217,3 +223,74 @@ def test_cli_interactive_tool_counts_are_per_task(
         '[工具统计] "glob" 次数=2',
         "[工具统计] 总调用次数=0",
     ]
+
+
+@pytest.mark.parametrize("option", ["-p", "--prompt"])
+def test_cli_rejects_removed_prompt_option(option: str) -> None:
+    with pytest.raises(SystemExit) as failure:
+        cli.parser().parse_args([option, "hello"])
+    assert failure.value.code == 2
+
+
+def test_dialogue_requests_permission_and_exports_only_after_exit(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    docker_stub: StubDockerRuntime,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    calls = (ToolCall("command", "bash", {"command": "echo simulated"}),)
+    model = ScriptedLLM([
+        LLMReply("", Message("assistant", "", calls), calls),
+        LLMReply("first complete", Message("assistant", "first complete")),
+        LLMReply("second complete", Message("assistant", "second complete")),
+    ])
+    monkeypatch.setattr(cli, "OpenAICompatibleModel", lambda *args, **kwargs: model)
+    exports: list[str] = []
+    executed: list[str] = []
+
+    def export() -> dict[str, list[str]]:
+        exports.append("export")
+        return {"added": [], "modified": [], "deleted": []}
+
+    def execute(name: str, arguments: dict) -> ToolResult:
+        executed.append(name)
+        return ToolResult("", name, "simulated")
+
+    monkeypatch.setattr(docker_stub, "export_changes", export)
+    monkeypatch.setattr(docker_stub, "execute_tool", execute)
+    inputs = iter(["first task", "y", "second task", "exit"])
+    prompts: list[str] = []
+
+    def read_input(prompt: str) -> str:
+        # 到下一次用户输入（包括授权）时，同一个沙箱仍未被结束导出。
+        assert exports == []
+        prompts.append(prompt)
+        return next(inputs)
+
+    monkeypatch.setattr("builtins.input", read_input)
+    assert main(["-C", str(workspace)]) == 0
+    assert prompts == ["study-coder> ", "> ", "study-coder> ", "study-coder> "]
+    assert executed == ["bash"] and exports == ["export"]
+    assert [m.content for m in model.requests[-1] if m.role == "user"][-2:] == [
+        "first task", "second task"]
+
+
+def test_dialogue_eof_exports_once_without_model_request(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    docker_stub: StubDockerRuntime,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    model = ScriptedLLM([])
+    monkeypatch.setattr(cli, "OpenAICompatibleModel", lambda *args, **kwargs: model)
+    exports: list[str] = []
+
+    def export() -> dict[str, list[str]]:
+        exports.append("export")
+        return {"added": [], "modified": [], "deleted": []}
+
+    def end_input(prompt: str) -> str:
+        raise EOFError()
+
+    monkeypatch.setattr(docker_stub, "export_changes", export)
+    monkeypatch.setattr("builtins.input", end_input)
+    assert main(["-C", str(workspace)]) == 0
+    assert model.requests == [] and exports == ["export"]

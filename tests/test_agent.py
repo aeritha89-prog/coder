@@ -54,7 +54,7 @@ def final(text: str) -> LLMReply:
 
 
 def agent(workspace: Path, replies: list[LLMReply], *, yes: bool = True,
-          mode: str = "one_shot", max_rounds: int = 12) -> tuple[Agent, ScriptedLLM]:
+          mode: str = "interactive", max_rounds: int = 12) -> tuple[Agent, ScriptedLLM]:
     model = ScriptedLLM(replies)
     settings = Settings("scripted", None, None, workspace, max_rounds=max_rounds)
     instance = Agent(model, default_tools(), DefaultPermissionPolicy(yes=yes),

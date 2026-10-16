@@ -207,19 +207,24 @@ uv run study-coder sandbox doctor
 
 ### 4. 执行第一个任务
 
-创建工作目录，先运行一个只用 Python 标准库的小任务：
+创建工作目录并启动对话：
 
 ```powershell
 New-Item -ItemType Directory -Force -Path .\demo-workspace | Out-Null
-uv run study-coder -C .\demo-workspace -p "创建 calculator.py，实现 divide(a, b)，b 为 0 时抛出 ZeroDivisionError；用标准库 unittest 编写 test_calculator.py，运行测试并报告结果。" --stream --yes
+uv run study-coder -C .\demo-workspace --stream --yes
 ```
 
 - `-C`：指定已经存在的宿主工作区。
-- `-p`：运行一次任务；省略后进入交互模式。
 - `--stream`：边生成边显示模型文字。
-- `--yes`：自动允许工具执行。单次任务未加此参数时，需要授权的工具会被拒绝。
+- `--yes`：自动允许工具执行；未指定时按需询问权限。
 
-任务结束后会打印沙箱任务 ID、文件变化数量和审阅、应用命令。**`--yes` 不会自动把成果写回宿主工作区。**
+进入 `study-coder>` 提示符后输入需求：
+
+```text
+创建 calculator.py，实现 divide(a, b)，b 为 0 时抛出 ZeroDivisionError；用标准库 unittest 编写 test_calculator.py，运行测试并报告结果。
+```
+
+一轮结束后可以继续提问、修改或等待后台任务。完成后输入 `exit` 或 `quit` 退出对话，程序会导出成果并打印沙箱任务 ID、文件变化数量和审阅、应用命令。**`--yes` 不会自动把成果写回宿主工作区。**
 
 ### 5. 审阅并应用成果
 
@@ -232,7 +237,7 @@ uv run study-coder sandbox apply $taskId
 uv run python -m unittest discover -s .\demo-workspace -p "test_*.py" -v
 ```
 
-应用后，生成文件才会进入 `demo-workspace`。如果希望任务结束后直接应用，在运行任务时添加 `--sandbox-apply auto`，或设置 `STUDY_CODER_SANDBOX_APPLY=auto`。
+应用后，生成文件才会进入 `demo-workspace`。如果希望退出对话后直接应用，启动时添加 `--sandbox-apply auto`，或设置 `STUDY_CODER_SANDBOX_APPLY=auto`。
 
 ### 6. 交互与会话恢复
 
@@ -333,4 +338,4 @@ uv run study-coder sandbox export $taskId `
 规则用于容器 tar 预过滤和宿主解压过滤；被排除的宿主原文件不会被当作删除。
 导出成功后使用 `sandbox review` 审阅，再用 `sandbox apply` 应用；已成功导出的任务不能新增排除规则。
 
-以上命令按实际任务状态选用，同一任务的导出、应用、恢复和清理应串行执行。单次运行退出码为 `0` 表示任务完成，`1` 表示失败或未完成，`2` 表示配置或启动检查错误。
+以上命令按实际任务状态选用，同一任务的导出、应用、恢复和清理应串行执行。对话退出码为 `0` 表示最后一轮任务与退出收尾成功（未输入任务时正常退出也为 `0`）；`1` 表示最后一轮失败、未完成或退出收尾失败；`2` 表示配置或启动检查错误。
