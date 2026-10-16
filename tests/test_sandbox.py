@@ -109,10 +109,54 @@ def test_export_skips_links_inside_excluded_nested_directory(
     assert not (tmp_path / "export" / "frontend").exists()
 
 
-def test_export_exclusion_budget_still_counts_excluded_files(tmp_path: Path) -> None:
+def test_export_excluded_files_do_not_use_output_budget(tmp_path: Path) -> None:
     exported = _archive([("frontend/node_modules/package/data", b"x", tarfile.REGTYPE)])
-    with pytest.raises(SandboxError, match="workspace export exceeds configured workspace limit"):
-        extract_export(exported, tmp_path / "export", max_total_bytes=0)
+    staging = tmp_path / "export"
+    assert extract_export(exported, staging, max_total_bytes=0) == {}
+    assert not (staging / "frontend").exists()
+
+
+@pytest.mark.parametrize(("relative", "exclude"), [
+    ("frontend/node_modules/package/cache.jar", ()),
+    ("gradlehome/caches/fastutil.jar", ("gradlehome/caches/*",)),
+])
+def test_export_skips_oversized_cache_and_keeps_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    relative: str, exclude: tuple[str, ...],
+) -> None:
+    # 缩小单文件阈值，覆盖实际的大缓存情形，避免分配真实的大文件。
+    monkeypatch.setattr("study_coder.sandbox.transfer.MAX_FILE_BYTES", 16)
+    exported = _archive([(relative, b"x" * 17, tarfile.REGTYPE),
+                         ("build/libs/app.jar", b"jar", tarfile.REGTYPE)])
+    staging = tmp_path / "export"
+    after = extract_export(exported, staging, exclude, max_total_bytes=3, max_files=1)
+    assert list(after) == ["build/libs/app.jar"]
+    assert (staging / "build/libs/app.jar").read_bytes() == b"jar"
+    assert not (staging / relative.split("/")[0]).exists()
+
+
+def test_export_member_limit_still_counts_excluded_entries(tmp_path: Path) -> None:
+    exported = _archive([(f"node_modules/cache/{index}", b"x", tarfile.REGTYPE)
+                         for index in range(3)])
+    with pytest.raises(SandboxError, match="export file count limit exceeded"):
+        extract_export(exported, tmp_path / "export", max_files=1)
+
+
+@pytest.mark.parametrize("limit", ["file_size", "file_count", "total_bytes"])
+def test_export_keeps_limits_for_included_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str,
+) -> None:
+    monkeypatch.setattr("study_coder.sandbox.transfer.MAX_FILE_BYTES", 16)
+    data = b"x" * 17 if limit == "file_size" else b"x"
+    count = 1 if limit == "file_size" else 2
+    exported = _archive([(f"src/file{index}", data, tarfile.REGTYPE)
+                         for index in range(count)])
+    expected = ("workspace export exceeds configured workspace limit"
+                if limit == "total_bytes" else "export file or count limit exceeded")
+    with pytest.raises(SandboxError, match=expected):
+        extract_export(exported, tmp_path / "export",
+                       max_files=1 if limit == "file_count" else 3,
+                       max_total_bytes=1 if limit == "total_bytes" else 100)
 
 
 def test_tar_exclusions_use_shared_unanchored_path_components() -> None:

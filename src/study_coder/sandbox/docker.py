@@ -26,6 +26,7 @@ from study_coder.sandbox.transfer import (
     changes,
     create_import_archive,
     extract_export,
+    filter_snapshot,
     recover_apply,
     tar_exclude_patterns,
 )
@@ -339,7 +340,7 @@ class DockerRuntime:
                       "no-new-privileges", "--pids-limit", str(policy.pids_limit),
                       "--cpus", str(policy.cpus), "--memory", f"{policy.memory_mb}m",
                       *network_args, *port_args,
-                      "--tmpfs", "/tmp:rw,nosuid,nodev,size=64m",
+                      "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g",
                       *task_env, "--workdir", "/workspace",
                       "--mount", f"type=volume,src={volume},dst=/workspace",
                       info["image_id"], "sleep", "infinity"], timeout=60)
@@ -716,16 +717,34 @@ class DockerRuntime:
         if state != "false":
             raise SandboxError("sandbox container is still running")
 
-    def export_changes(self) -> dict[str, list[str]]:
+    def export_changes(self, *, extra_exclude: tuple[str, ...] = ()) -> dict[str, list[str]]:
         """停止任务容器，从只读 volume 导出到 staging，返回差异表。
 
         成功时记录导出哈希和 awaiting_apply，然后回收容器/网络/volume；
         导出失败时记录 export_failed，保留 volume 供重试。
+        显式新增排除规则单独保存，重试时继续使用；任务创建时的策略与快照保留。
         """
+        previous = self.record.get("export_exclude", [])
+        if not isinstance(previous, list) or any(not isinstance(p, str) for p in previous):
+            raise SandboxError("sandbox task has invalid saved export exclusions")
+        requested = tuple(p.replace("\\", "/").removeprefix("./").rstrip("/")
+                          for p in extra_exclude)
+        if any(not p or "\0" in p or p.startswith("/") or ":" in p
+               or any(part in {".", ".."} for part in p.split("/"))
+               for p in requested):
+            raise SandboxError("export exclusions must be nonempty workspace-relative patterns")
+        additions = tuple(p for p in requested if p not in (*self.policy.exclude, *previous))
         if self.record["status"] in {"awaiting_apply", "applied"}:
+            if additions:
+                raise SandboxError("sandbox task is already exported; cannot add export exclusions")
             return self.record["diff"]
         if self.record["status"] == "cleanup_failed":
             raise SandboxError("sandbox cleanup failed; verify container state before export")
+        if additions:
+            self.record["export_exclude"] = list(dict.fromkeys((*previous, *additions)))
+            # 先持久化显式选择，控制、归档或 tar 失败后再次 export 可继续使用。
+            save_record(self.directory, self.record)
+        exclusions = (*self.policy.exclude, *self.record.get("export_exclude", []))
         if not self.running:
             self._ensure_stopped()
             # 容器先前已停，未归档任务不能凭旧状态推断成功；显式记录 lost。
@@ -762,7 +781,8 @@ class DockerRuntime:
                    "--security-opt", "no-new-privileges", "--user", "10001:10001",
                    "--mount", f"type=volume,src={self.volume},dst=/workspace,readonly",
                    export_image, "tar", "-C", "/workspace", "-cf", "-",
-                   *[f"--exclude={name}" for name in tar_exclude_patterns()], "."]
+                   "--no-wildcards-match-slash",
+                   *[f"--exclude={name}" for name in tar_exclude_patterns(exclusions)], "."]
         # 导出容器只读挂载同一 volume，tar 写到 stdout，宿主再逐成员校验。
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert process.stdout is not None and process.stderr is not None
@@ -793,7 +813,7 @@ class DockerRuntime:
         watchdog.start()
         try:
             exported = extract_export(
-                cast(BinaryIO, process.stdout), staging, self.policy.exclude,
+                cast(BinaryIO, process.stdout), staging, exclusions,
                 max_total_bytes=self.policy.workspace_max_bytes,
                 max_files=self.policy.workspace_max_files)
             # tarfile 的 r|* 模式并不按需读满管道：它先向底层取 BLOCKSIZE=512
@@ -837,7 +857,9 @@ class DockerRuntime:
         self.record["exported"] = exported
         # 只有 tar 全部通过校验，才发布可供 review/apply 的导出目录与哈希。
         self.record["export_dir"] = staging_name
-        diff = changes(self.record["snapshot"], exported)
+        # 应用使用同一过滤基线；被排除的宿主原文件不会进入 deleted 或被回写。
+        self.record["apply_snapshot"] = filter_snapshot(self.record["snapshot"], exclusions)
+        diff = changes(self.record["apply_snapshot"], exported)
         self.record["diff"] = diff
         self.record["status"] = "awaiting_apply"
         save_record(self.directory, self.record)
@@ -906,7 +928,8 @@ def apply_task(policy: SandboxPolicy, task_id: str) -> dict[str, list[str]]:
     save_record(directory, record)
     try:
         result = apply_changes(Path(record["workspace"]), stage,
-                               record["snapshot"], record["exported"], directory / journal_name)
+                               record.get("apply_snapshot", record["snapshot"]),
+                               record["exported"], directory / journal_name)
     except SandboxError:
         journal = directory / journal_name
         try:

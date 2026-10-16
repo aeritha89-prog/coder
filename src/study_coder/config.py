@@ -25,6 +25,11 @@ class Settings:
     request_timeout_s: int = 60
     max_skill_chars: int = 40_000
     max_active_skill_chars: int = 60_000
+    memory_enabled: bool = True
+    memory_max_context_tokens: int = 1200
+    memory_top_k: int = 6
+    memory_max_entries: int = 1000
+    memory_auto_episode: bool = True
 
     def __post_init__(self) -> None:
         """将工作区固定为真实路径，避免相对路径随进程目录变化。"""
@@ -42,6 +47,14 @@ class Settings:
                 raise ValueError(f"{name} must be an integer from 1 to 1000000")
         if not self.model.strip():
             raise ValueError("model must not be empty")
+        for name in ("memory_enabled", "memory_auto_episode"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        for name, upper in (("memory_max_context_tokens", 32_000), ("memory_top_k", 100),
+                            ("memory_max_entries", 10_000)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= upper:
+                raise ValueError(f"{name} must be an integer from 1 to {upper}")
 
 
 def load_settings(env: Mapping[str, str] | None = None,
@@ -74,4 +87,9 @@ def load_settings(env: Mapping[str, str] | None = None,
         request_timeout_s=int(values.get("STUDY_CODER_REQUEST_TIMEOUT_S", "60")),
         max_skill_chars=int(values.get("STUDY_CODER_MAX_SKILL_CHARS", "40000")),
         max_active_skill_chars=int(values.get("STUDY_CODER_MAX_ACTIVE_SKILL_CHARS", "60000")),
+        memory_enabled=values.get("STUDY_CODER_MEMORY_ENABLED", "true").casefold() in {"1", "true", "yes", "on"},
+        memory_max_context_tokens=int(values.get("STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS", "1200")),
+        memory_top_k=int(values.get("STUDY_CODER_MEMORY_TOP_K", "6")),
+        memory_max_entries=int(values.get("STUDY_CODER_MEMORY_MAX_ENTRIES", "1000")),
+        memory_auto_episode=values.get("STUDY_CODER_MEMORY_AUTO_EPISODE", "true").casefold() in {"1", "true", "yes", "on"},
     )

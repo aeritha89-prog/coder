@@ -26,7 +26,8 @@ def session_path(root: Path, name: str) -> Path:
 
 
 def save_session(root: Path, name: str, settings: Settings, history: list[Message],
-                 active_skills: dict[str, str] | None = None) -> Path:
+                 active_skills: dict[str, str] | None = None,
+                 memory_state: dict[str, Any] | None = None) -> Path:
     """原子保存完整消息和技能版本，返回最终会话路径。
 
     root 是宿主保存目录；history 含原始 assistant/tool 调用组，保留 call_id。
@@ -36,10 +37,10 @@ def save_session(root: Path, name: str, settings: Settings, history: list[Messag
     path = session_path(root, name)
     path.parent.mkdir(exist_ok=True)
     # payload 是会话协议，区别于后台 runner 的 record 和管理器的 index。
-    payload = {"version": 2, "created_at": datetime.now(timezone.utc).isoformat(),
+    payload = {"version": 3, "created_at": datetime.now(timezone.utc).isoformat(),
                "workspace": str(settings.workspace), "model": settings.model,
                "history": [asdict(message) for message in history],
-               "active_skills": dict(active_skills or {})}
+               "active_skills": dict(active_skills or {}), "memory": memory_state}
     temporary: str | None = None  # 同目录临时文件名，供替换成功或异常后清理。
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
@@ -57,11 +58,11 @@ def save_session(root: Path, name: str, settings: Settings, history: list[Messag
     return path
 
 
-def load_session_state(root: Path, name: str, settings: Settings
-                       ) -> tuple[list[Message], dict[str, str]]:
-    """接受 v1/v2 同工作区记录，重建消息并校验技能摘要字段。"""
+def load_session_bundle(root: Path, name: str, settings: Settings
+                        ) -> tuple[list[Message], dict[str, str], Any]:
+    """读取完整会话及短期层；没有缓存的会话仍可从完整历史重新摘要。"""
     payload: dict[str, Any] = json.loads(session_path(root, name).read_text(encoding="utf-8"))
-    if payload.get("version") not in (1, 2) or payload.get("workspace") != str(settings.workspace):
+    if payload.get("version") not in (1, 2, 3) or payload.get("workspace") != str(settings.workspace):
         raise ValueError("session version or workspace does not match")
     messages: list[Message] = []
     for raw in payload["history"]:
@@ -74,7 +75,14 @@ def load_session_state(root: Path, name: str, settings: Settings
         or not re.fullmatch(r"[0-9a-f]{64}", digest) for name, digest in skills.items()
     ):
         raise ValueError("invalid session active_skills")
-    return messages, skills
+    return messages, skills, payload.get("memory")
+
+
+def load_session_state(root: Path, name: str, settings: Settings
+                       ) -> tuple[list[Message], dict[str, str]]:
+    """保留只需要消息和活动技能的读取接口。"""
+    history, skills, _ = load_session_bundle(root, name, settings)
+    return history, skills
 
 
 def load_session(root: Path, name: str, settings: Settings) -> list[Message]:

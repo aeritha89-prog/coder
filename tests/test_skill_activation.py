@@ -146,6 +146,7 @@ def test_session_roundtrip_restores_only_current_trusted_body(tmp_path: Path) ->
     history, skills = load_session_state(tmp_path, "test", agent.settings)
     restored, model, _ = make_agent(tmp_path, [done()])
     restored.restore_session(history, skills)
+    assert restored.history == history and restored.history is not history
     assert restored.active_skills == agent.active_skills
     assert restored.run("continue").stop_reason == "completed"
     assert any("FULL SKILL INSTRUCTIONS" in m.content for m in model.requests[0])
@@ -157,17 +158,18 @@ def test_session_roundtrip_restores_only_current_trusted_body(tmp_path: Path) ->
         changed.restore_session(history, skills)
 
 
-def test_legacy_skill_system_between_results_is_migrated(tmp_path: Path) -> None:
+def test_restore_session_rejects_interrupted_tool_result_group(tmp_path: Path) -> None:
     agent, _, _ = make_agent(tmp_path, [])
+    initial_history = list(agent.history)
     calls = (skill(), ToolCall("read", "read_file", {"path": "file"}))
     history = [Message("system", "Policy"), Message("assistant", "", calls),
-               Message("tool", "FULL SKILL INSTRUCTIONS", call_id="s"),
-               Message("system", "The following skill is active:FULL SKILL INSTRUCTIONS"),
+               Message("tool", "Activated skill 'test'.", call_id="s"),
+               Message("system", "Unexpected message between tool results"),
                Message("tool", "file", call_id="read")]
-    agent.restore_session(history, {})
-    assert agent.active_skills == {"test": "FULL SKILL INSTRUCTIONS"}
-    agent.context.validate_tool_message_groups(agent.history)
-    assert not any("FULL SKILL INSTRUCTIONS" in m.content for m in agent.history)
+    with pytest.raises(ContextError, match="lack matching results"):
+        agent.restore_session(history, {})
+    assert agent.history == initial_history
+    assert agent.active_skills == {}
 
 
 def test_budget_env_and_invalid_values(tmp_path: Path) -> None:

@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from study_coder.agent import Agent
 from study_coder.config import load_settings
 from study_coder.context import ContextManager, ModelSummarizer
 from study_coder.llm import OpenAICompatibleModel
+from study_coder.memory import MEMORY_KINDS, MemoryManager, MemoryStore
 from study_coder.permissions import Decision, DefaultPermissionPolicy, PermissionRequest
 from study_coder.sandbox.base import SandboxError
 from study_coder.sandbox.docker import (
@@ -27,7 +29,7 @@ from study_coder.sandbox.docker import (
 )
 from study_coder.sandbox.manifest import list_records, load_record
 from study_coder.sandbox.policy import load_policy
-from study_coder.session import load_session_state, save_session, session_path
+from study_coder.session import load_session_bundle, save_session, session_path
 from study_coder.tools import default_tools
 from study_coder.types import Message
 
@@ -45,7 +47,7 @@ def _ask(request: PermissionRequest) -> Decision:
 
 def parser() -> argparse.ArgumentParser:
     """声明运行参数；配置文件中的默认值由 load_settings 提供。"""
-    result = argparse.ArgumentParser(prog="study-coder")
+    result = argparse.ArgumentParser(prog="study-coder", epilog="Management: study-coder memory --help; study-coder sandbox --help")
     result.add_argument("-p", "--prompt", help="run one task and exit")
     result.add_argument("-C", "--workspace", type=Path, help="existing workspace directory")
     result.add_argument("--yes", action="store_true", help="preapprove side-effect tools")
@@ -70,9 +72,13 @@ def _sandbox_command(argv: Sequence[str]) -> int:
                                                "export", "recover", "cleanup"))
     command.add_argument("task_id", nargs="?")
     command.add_argument("--profile", default="general")
+    command.add_argument("--exclude", action="append", default=[], metavar="PATTERN",
+                         help="append an export exclusion; repeat for multiple rules")
     command.add_argument("--discard", action="store_true",
                          help="discard unexported task data while cleaning resources")
     args = command.parse_args(argv)
+    if args.exclude and args.action != "export":
+        command.error("--exclude is only supported for sandbox export")
     try:
         policy = replace(load_policy(), profile=args.profile)
         if args.action == "doctor":
@@ -103,11 +109,45 @@ def _sandbox_command(argv: Sequence[str]) -> int:
             else:
                 settings = replace(load_settings(), workspace=Path(record["workspace"]))
                 runtime = DockerRuntime(settings, policy_for_task(policy, record), record)
-                diff = runtime.export_changes()
+                diff = runtime.export_changes(extra_exclude=tuple(args.exclude))
                 print(f"Exported task {args.task_id}: {sum(map(len, diff.values()))} changes")
         return 0
     except (SandboxError, ValueError, OSError) as exc:
         print(f"Sandbox error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _memory_command(argv: Sequence[str]) -> int:
+    """直接管理项目长期层；无需启动 Docker 或请求模型。"""
+    command = argparse.ArgumentParser(prog="study-coder memory")
+    command.add_argument("action", choices=("list", "search", "remember", "forget"))
+    command.add_argument("value", nargs="?", help="search query or memory id")
+    command.add_argument("-C", "--workspace", type=Path)
+    command.add_argument("--kind", choices=MEMORY_KINDS)
+    command.add_argument("--key")
+    command.add_argument("--content")
+    command.add_argument("--limit", type=int, default=20)
+    args = command.parse_args(argv)
+    try:
+        settings = load_settings()
+        settings = replace(settings, workspace=args.workspace or settings.workspace)
+        store = MemoryStore(load_policy().state_dir, settings.workspace, settings.memory_max_entries)
+        value: Any
+        if args.action in {"list", "search"}:
+            if args.action == "search" and not args.value:
+                command.error("search requires a query")
+            value = [asdict(entry) for entry in store.search(
+                args.value or "", kind=args.kind, limit=args.limit)]
+        elif args.action == "remember":
+            if not args.kind or not args.key or not args.content:
+                command.error("remember requires --kind, --key and --content")
+            value = asdict(store.remember(args.kind, args.key, args.content))
+        else:
+            value = {"deleted": store.forget(args.value)}
+        print(json.dumps(value, ensure_ascii=False, indent=2))
+        return 0
+    except (ValueError, OSError, sqlite3.Error, SandboxError) as exc:
+        print(f"Memory error: {exc}", file=sys.stderr)
         return 2
 
 
@@ -116,6 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw = list(argv) if argv is not None else sys.argv[1:]
     if raw and raw[0] == "sandbox":
         return _sandbox_command(raw[1:])
+    if raw and raw[0] == "memory":
+        return _memory_command(raw[1:])
     args = parser().parse_args(raw)
     runtime: DockerRuntime | None = None
     policy_config = None
@@ -159,24 +201,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 流式输出只用于用户可见答复；摘要需要一次完整的非流式回复。
         summary_model = OpenAICompatibleModel(settings) if args.stream else model
         context = ContextManager(settings, ModelSummarizer(summary_model))
+        memory = (MemoryManager(MemoryStore(runtime.directory.parent, settings.workspace,
+                                           settings.memory_max_entries),
+                                settings.memory_max_context_tokens, settings.memory_top_k,
+                                settings.memory_auto_episode) if settings.memory_enabled else None)
         policy = DefaultPermissionPolicy(yes=args.yes, ask=ask_permission)
 
         def checkpoint(history: list[Message]) -> None:
             """整组 tool 结果补齐后保存；成功返回后 Agent 才确认后台结果已读取。"""
-            save_session(runtime.directory, "history", settings, history, agent.skill_state())
+            save_session(runtime.directory, "history", settings, history, agent.skill_state(),
+                         context.memory_state())
 
         agent = Agent(model, default_tools(
             allow_web_search=policy_config.allow_web_search,
             service_ports=policy_config.service_ports,
             background_enabled=policy_config.background_enabled,
+            memory_enabled=memory is not None,
             skill_catalog=runtime.skill_catalog),
             policy, settings, runtime=runtime,
                       mode="one_shot" if args.prompt else "interactive", context=context,
-                      history_checkpoint=checkpoint, model_activity=model_activity)
+                      history_checkpoint=checkpoint, model_activity=model_activity, memory=memory)
         if args.session and session_path(session_root, args.session).exists():
-            # 恢复原始历史；摘要可从历史重新计算，授权仍由本次策略决定。
-            history, skills = load_session_state(session_root, args.session, settings)
-            agent.restore_session(history, skills)
+            # 原始历史与短期覆盖边界一起恢复；不恢复旧进程和上次授权。
+            history, skills, memory_state = load_session_bundle(session_root, args.session, settings)
+            agent.restore_session(history, skills, memory_state)
     except (ValueError, OSError, KeyError, SandboxError) as exc:
         if runtime is not None:
             try:
@@ -210,8 +258,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                   + "，本轮已结束。", file=sys.stderr, flush=True)
         try:
             if args.session:
-                save_session(session_root, args.session, settings, agent.history, agent.skill_state())
-            save_session(runtime.directory, "history", settings, agent.history, agent.skill_state())
+                save_session(session_root, args.session, settings, agent.history, agent.skill_state(),
+                             context.memory_state())
+            save_session(runtime.directory, "history", settings, agent.history, agent.skill_state(),
+                         context.memory_state())
         except OSError as exc:
             print(f"Session save failed: {exc}", file=sys.stderr)
             return 1
@@ -256,7 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if line in {"exit", "quit"}:
             return finish(0)
         if line == "/help":
-            print("/help  /clear (conversation only)  /tokens  exit")
+            print("/help  /clear (working/short-term only)  /tokens  /memory [query]  /forget ID  exit")
         elif line == "/clear":
             agent.clear()
             print("Conversation cleared; project files were not changed.")
@@ -266,5 +316,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"prompt: {usage.prompt_tokens}; completion: {usage.completion_tokens}")
             else:
                 print("Token usage unavailable from this model so far.")
+        elif line == "/memory" or line.startswith("/memory ") or line.startswith("/forget "):
+            if memory is None:
+                print("Project memory is disabled.")
+                continue
+            try:
+                if line.startswith("/forget "):
+                    print(json.dumps({"deleted": memory.store.forget(line[8:].strip())}))
+                else:
+                    print(json.dumps([asdict(entry) for entry in memory.store.search(line[7:].strip())],
+                                     ensure_ascii=False, indent=2))
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                print(f"Memory error: {exc}", file=sys.stderr)
         elif line:
             run(line)

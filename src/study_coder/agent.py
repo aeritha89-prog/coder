@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import sys
+import uuid
 from typing import Callable, Literal
 
 from study_coder.config import Settings
 from study_coder.context import ContextManager, ModelSummarizer
 from study_coder.llm import ChatModel
+from study_coder.memory import MEMORY_TOOLS, MemoryManager
 from study_coder.permissions import Mode, PermissionPolicy, PermissionRequest
 from study_coder.prompt import SYSTEM_PROMPT
 from study_coder.sandbox.background_runner import TERMINAL
@@ -28,7 +31,8 @@ class Agent:
                  context: ContextManager | None = None,
                  system_prompt: str = SYSTEM_PROMPT,
                  history_checkpoint: Callable[[list[Message]], None] | None = None,
-                 model_activity: Callable[[bool], None] | None = None) -> None:
+                 model_activity: Callable[[bool], None] | None = None,
+                 memory: MemoryManager | None = None) -> None:
         """注入模型、工具及策略，初始历史只含系统约定。"""
         self.model = model
         self.tools = tools
@@ -40,6 +44,7 @@ class Agent:
         self.system_prompt = system_prompt
         self.history_checkpoint = history_checkpoint
         self.model_activity = model_activity
+        self.memory = memory
         self.history: list[Message] = [Message("system", system_prompt)]
         self.active_skills: dict[str, str] = {}
         self.total_usage = Usage()
@@ -81,34 +86,13 @@ class Agent:
         """会话仅保存名称和内容摘要；正文恢复自当前可信镜像清单。"""
         return {name: skill_digest(body) for name, body in self.active_skills.items()}
 
-    def restore_session(self, history: list[Message], skills: dict[str, str]) -> None:
-        """验证技能版本后恢复；兼容旧版历史里嵌入的技能 system 消息。"""
+    def restore_session(self, history: list[Message], skills: dict[str, str],
+                        memory_state: dict | None = None) -> None:
+        """校验历史和已保存的技能哈希，从当前可信清单恢复正文。"""
+        self.context.validate_tool_message_groups(history)
         loader = self.tools.get("skill_loader")
-        requested = dict(skills)
-        clean_history: list[Message] = []
-        legacy_prefix = "The following skill is active:"
-        skill_calls: dict[str, str] = {}
-        for message in history:
-            for call in message.tool_calls:
-                if call.name == "skill_loader" and isinstance(call.arguments.get("skill_name"), str):
-                    skill_calls[call.id] = call.arguments["skill_name"]
-            if message.role == "system" and message.content.startswith(legacy_prefix):
-                old_body = message.content[len(legacy_prefix):]
-                if isinstance(loader, skill_loader):
-                    for name, entry in loader.skills.items():
-                        if old_body == entry["body"]:
-                            requested[name] = skill_digest(old_body)
-                # 旧版的失败/截断内容没有匹配的可信正文，不能恢复成技能指令。
-                continue
-            if message.role == "tool" and message.call_id in skill_calls and isinstance(loader, skill_loader):
-                name = skill_calls[message.call_id]
-                if name in loader.skills and message.content == loader.skills[name]["body"]:
-                    # 迁移旧版本时，也去掉 tool 结果中与活动前缀重复的完整正文。
-                    message = Message("tool", f"Loaded skill {name!r} (restored).", call_id=message.call_id)
-            clean_history.append(message)
-        self.context.validate_tool_message_groups(clean_history)
         restored: dict[str, str] = {}
-        for name, digest in requested.items():
+        for name, digest in skills.items():
             if not isinstance(loader, skill_loader) or name not in loader.skills:
                 raise ToolFailure(f"session skill {name!r} is unavailable in this image")
             body = loader.skills[name]["body"]
@@ -121,9 +105,9 @@ class Agent:
             raise ToolFailure("session active skills exceed max_active_skill_chars")
         if restored and self.context.pinned_tokens(self.system_prompt, restored, self.tools.schemas()) >= 0.5 * self.settings.context_window_tokens:
             raise ToolFailure("session active skills leave insufficient context budget")
-        self.history = clean_history
+        self.history = list(history)
         self.active_skills = restored
-        self.context.reset()
+        self.context.restore_memory(memory_state, history)
 
     def _execute_call(self, call: ToolCall) -> ToolResult:
         """执行单个工具请求，把拒绝或失败变为模型可读取的观察。"""
@@ -138,7 +122,11 @@ class Agent:
                 return ToolResult(call.id, call.name,
                                   f"{call.name} denied in {self.mode} mode", True)
         try:
-            if call.name in SANDBOX_TOOLS:
+            if call.name in MEMORY_TOOLS:
+                if self.memory is None:
+                    return ToolResult(call.id, call.name, "Error: project memory is disabled", True)
+                raw = self.memory.execute(call.name, call.arguments, self.settings.max_tool_output_chars)
+            elif call.name in SANDBOX_TOOLS:
                 raw = self.runtime.execute_tool(call.name, call.arguments)
 
             elif call.name == "web_search":
@@ -196,13 +184,8 @@ class Agent:
         results 是本次 run 截至当前的累计工具观察；重复确认同一编号是幂等的。
         history_checkpoint 是 CLI 注入的保存回调，无回调的真实运行时使用默认保存。
         """
-        directory = getattr(self.runtime, "directory", None)
         if self.history_checkpoint is not None:
             self.history_checkpoint(self.history)
-        elif directory is not None:
-            from study_coder.session import save_session
-            save_session(directory, "history", self.settings,
-                         self.history, self.skill_state())
         # delivered 保存执行编号 job_id，而 result.call_id 对应一次模型工具调用。
         # 同一任务的 start/get/wait 可有多个真实 call_id，不能复用启动 call_id。
         delivered = []
@@ -238,6 +221,24 @@ class Agent:
             cancel(targets)
 
     def run(self, user_text: str) -> AgentRunResult:
+        """工作和短期层由上下文维护；一轮结束后归档可追溯的情景观察。"""
+        start = len(self.history)
+        directory = getattr(self.runtime, "directory", None)
+        origin = f"task={directory.name if directory is not None else 'api'};history_start={start}"
+        if self.memory is not None:
+            self.memory.origin = origin
+        outcome = self._run_turn(user_text)
+        if self.memory is not None:
+            try:
+                # 来源可定位到该沙箱 sessions/history.json 的消息区间；UUID 仅用于去重键。
+                self.memory.record_episode(user_text, outcome.tool_results, outcome.stop_reason,
+                                           origin + f";history_end={len(self.history)};" + uuid.uuid4().hex)
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                # 长期层暂时不可写不能让已经完成的代码任务变成失败。
+                print(f"[记忆] 情景归档失败：{exc}", file=sys.stderr, flush=True)
+        return outcome
+
+    def _run_turn(self, user_text: str) -> AgentRunResult:
         """运行一个用户任务，直到得到最终答复、触及轮数上限或中断。
 
         history 保存完整原始消息；每轮传给模型的是 ContextManager 生成的压缩视图。
@@ -260,10 +261,17 @@ class Agent:
                 # task_state 是 .tasks 的计划摘要，background_state 是命令执行元数据；
                 # 两种状态机独立，命令成功不能自动把计划项标成 completed。
                 background_state = getattr(self.runtime, "get_background_state", lambda: "")()
+                memory_context = ""
+                if self.memory is not None:
+                    try:
+                        memory_context = self.memory.recall(user_text + "\n" + task_state, self.context)
+                    except (ValueError, OSError, sqlite3.Error) as exc:
+                        print(f"[记忆] 本轮跳过长期回忆：{exc}", file=sys.stderr, flush=True)
                 model_messages = self.context.build_view(
                     self.history, task_state=task_state,
                     background_state=background_state,
-                    active_skills=self.active_skills, tool_schemas=schemas)
+                    active_skills=self.active_skills, tool_schemas=schemas,
+                    memory_context=memory_context)
                 if self.context.last_summary_usage:
                     # 摘要模型也会消耗 token；仅有供应方报告时才累计。
                     summary_usage = self.context.last_summary_usage

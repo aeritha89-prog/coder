@@ -4,6 +4,7 @@ from study_coder.tools.background import background_tools
 from study_coder.tools.base import Tool, ToolRegistry
 from study_coder.tools.bash import SandboxBashTool
 from study_coder.tools.edit import EditFileTool, WriteFileTool
+from study_coder.tools.memory import memory_tools
 from study_coder.tools.read import ReadFileTool
 from study_coder.tools.sandbox_service import StartServiceTool, StopServiceTool
 from study_coder.tools.search import GlobTool, GrepTool
@@ -24,6 +25,7 @@ from study_coder.tools.websearch import web_search
 def default_tools(*, allow_web_search: bool = False,
                   service_ports: tuple[int, ...] = (),
                   background_enabled: bool = True,
+                  memory_enabled: bool = False,
                   skill_catalog: dict[str, dict[str, str]] | None = None) -> ToolRegistry:
     """创建独立注册表；顺序决定传给模型的工具描述顺序。"""
     registry = ToolRegistry()
@@ -42,6 +44,8 @@ def default_tools(*, allow_web_search: bool = False,
     if background_enabled:
         # 此开关与 DockerRuntime 路由检查使用同一宿主策略；关闭时模型不看到工具。
         tools.extend(background_tools())
+    if memory_enabled:
+        tools.extend(memory_tools())
     for tool in tools:
         registry.register(tool)
     return registry

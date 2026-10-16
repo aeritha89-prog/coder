@@ -79,7 +79,23 @@ Agent 根据工具结果继续读取、修改或验证代码，直到完成任�
 
 设置服务端口后，会注册 `start_service`、`stop_service`，用于管理长期运行的 Web 服务和检查端口就绪。服务进程在任务容器内运行，任务结束时停止。当前服务使用 isolated internal 网络；容器内就绪不等于宿主浏览器可访问，端口发布是否实际生效需要结合 Docker 网络状态确认。
 
-### 上下文与会话
+### 三层记忆与会话
+
+| 层级 | 内容 | 保存方式 |
+| --- | --- | --- |
+| 工作记忆 | 当轮目标、计划与后台状态、近期消息，以及本轮召回的资料 | 每次模型请求重新组装，受上下文预算限制 |
+| 短期记忆 | 当前会话的增量摘要、已摘要消息组的哈希 | 随会话保存，恢复后复用 |
+| 长期记忆 | 项目偏好、历史经验和可复用的操作方法 | 宿主 SQLite，跨会话保留，按项目隔离 |
+
+长期记忆分为三类：
+
+- **语义记忆 `semantic`**：偏好和稳定知识，例如回复语言、项目使用的框架。
+- **情景记忆 `episodic`**：历史事实和经验，例如某次构建失败及其工具输出。每轮结束后默认自动归档最近的工具观察，不把模型自行声称的成功当成验证结果。
+- **程序性记忆 `procedural`**：可复用的规则和操作方法，例如测试步骤、构建命令。
+
+模型通过 `memory_remember` 保存或更新知识，使用相同的类别和键更新旧条目；通过 `memory_search` 查询，使用 `memory_forget` 删除。写入和删除经过工具权限判断。条目记录来源与更新时间，情景观察包含工具调用编号，可对应到任务对话。
+
+每轮按当前需求自动检索长期记忆。英文按词、中文按双字匹配；偏好和规则也可作为通用候选。只加入预算内的完整条目，不需要 embedding 服务。历史资料以数据形式进入模型输入，当前用户要求优先；文件内容、测试结果和服务状态仍需重新检查。模型显式写入的条目标记为 Agent 笔记，不视为自动验证过的事实。
 
 完整对话保存在会话文件中。每次请求会根据上下文预算整理发送给模型的内容：
 
@@ -95,6 +111,7 @@ Agent 根据工具结果继续读取、修改或验证代码，直到完成任�
 
 ```text
 sandbox/
+  memory/<工作区路径哈希>/memory.sqlite3  项目长期记忆
   history/sessions/<会话名>.json     命名会话
   <沙箱任务ID>/
     record.json                    生命周期与文件差异记录
@@ -102,7 +119,9 @@ sandbox/
     background/                    后台命令归档
 ```
 
-恢复会话时会检查工作区路径和已激活技能。摘要缓存保留在内存中，重启后从历史重新建立。会话只恢复对话，旧任务的文件仍需单独应用，容器和进程不会恢复。
+恢复会话时会检查工作区路径、已激活技能，以及短期摘要对应的历史前缀。前缀匹配时直接复用摘要；不匹配时丢弃缓存，从完整历史重新建立。工作记忆中的任务和后台状态重新查询，不恢复旧进程。旧任务的文件仍需单独应用。
+
+长期记忆默认最多 1000 条；达到容量时淘汰最旧的情景条目，语义和程序性条目需显式删除。常见密钥格式会被拒绝写入或在自动情景归档时脱敏。完整原始工具输出仍以会话和后台归档为准。
 
 ### 技能加载
 
@@ -227,10 +246,24 @@ uv run study-coder -C .\demo-workspace --session demo --stream
 | --- | --- |
 | `/help` | 显示交互命令 |
 | `/tokens` | 显示模型返回的累计输入、输出 token 用量；模型未提供时显示不可用 |
-| `/clear` | 清除对话、摘要缓存和已激活技能；不删除工作区文件或停止后台命令 |
+| `/clear` | 清除对话、工作记忆、短期记忆和已激活技能；保留长期记忆、工作区文件和后台命令 |
+| `/memory [关键词]` | 查看当前项目的长期记忆；可带关键词查询 |
+| `/forget 记忆ID` | 删除一条长期记忆 |
 | `exit`、`quit` | 退出并导出成果 |
 
 再次用同一工作区和 `--session demo` 启动即可恢复对话。会话名称允许字母、数字、下划线和连字符，长度为 1–64 个字符。退出后仍需按输出提示应用成果。
+
+也可以直接管理长期记忆，这些命令无需启动模型或 Docker：
+
+```powershell
+uv run study-coder memory remember -C .\demo-workspace --kind semantic --key reply_language --content "使用中文回复"
+uv run study-coder memory remember -C .\demo-workspace --kind procedural --key test_command --content "在项目根目录运行 python -m unittest discover -v"
+uv run study-coder memory list -C .\demo-workspace
+uv run study-coder memory search "测试" -C .\demo-workspace
+uv run study-coder memory forget mem_替换为实际编号 -C .\demo-workspace
+```
+
+长期条目在同一工作区的不同会话间共享，不会写入任务容器或随文件成果导出。`--session` 用于恢复对话和短期摘要；不指定会话名也能召回该项目的长期记忆。
 
 ### 7. 常用配置
 
@@ -243,6 +276,11 @@ uv run study-coder -C .\demo-workspace --session demo --stream
 | `STUDY_CODER_REQUEST_TIMEOUT_S` | `60` | 单次模型请求超时 |
 | `STUDY_CODER_COMMAND_TIMEOUT_S` | `60` | 前台命令默认超时，秒 |
 | `STUDY_CODER_MAX_TOOL_OUTPUT_CHARS` | `12000` | 工具返回给模型的文本长度上限 |
+| `STUDY_CODER_MEMORY_ENABLED` | `true` | 启用项目长期记忆及对应工具 |
+| `STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS` | `1200` | 每轮召回的 token 预算，同时不超过上下文窗口的 10% |
+| `STUDY_CODER_MEMORY_TOP_K` | `6` | 每轮自动召回的候选条目数 |
+| `STUDY_CODER_MEMORY_MAX_ENTRIES` | `1000` | 每个项目的长期记忆容量 |
+| `STUDY_CODER_MEMORY_AUTO_EPISODE` | `true` | 自动归档本轮工具观察为情景记忆 |
 | `STUDY_CODER_SANDBOX_MAX_COMMAND_TIMEOUT_S` | `1800` | 前台与后台命令允许的最大超时 |
 | `STUDY_CODER_SANDBOX_BACKGROUND_ENABLED` | `true` | 是否提供后台命令工具 |
 | `STUDY_CODER_SANDBOX_MAX_BACKGROUND_JOBS` | `4` | 后台命令并发上限 |
@@ -281,5 +319,18 @@ uv run study-coder sandbox cleanup $taskId
 - `export`：重试导出保留的工作卷，例如上次导出失败后。
 - `recover`：恢复中断的文件应用事务，回滚后重新审阅、应用。
 - `cleanup`：清理任务所属资源；未导出的成果会受到保护。显式添加 `--discard` 才允许丢弃未导出成果。
+
+导出失败涉及下载的工具链或缓存时，可给已有任务追加排除规则：
+
+```powershell
+uv run study-coder sandbox export $taskId `
+  --exclude "toolchain/jdk25" `
+  --exclude "gradlehome/caches"
+```
+
+`--exclude` 可重复使用，支持目录名、相对路径和通配符（通配符请加引号）。
+规则追加到任务原有排除规则，并保存在该任务中，后续重试无需重复传入。
+规则用于容器 tar 预过滤和宿主解压过滤；被排除的宿主原文件不会被当作删除。
+导出成功后使用 `sandbox review` 审阅，再用 `sandbox apply` 应用；已成功导出的任务不能新增排除规则。
 
 以上命令按实际任务状态选用，同一任务的导出、应用、恢复和清理应串行执行。单次运行退出码为 `0` 表示任务完成，`1` 表示失败或未完成，`2` 表示配置或启动检查错误。

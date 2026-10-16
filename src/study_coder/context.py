@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from study_coder.config import Settings
 from study_coder.llm import ChatModel
+from study_coder.memory import ShortTermMemory, WorkingMemory, memory_message
 from study_coder.types import Message, Usage
 
 
@@ -151,12 +152,47 @@ class ContextManager:
         self.last_summary_usage: Usage | None = None
         self._summary_text = ""
         self._summary_keys: tuple[str, ...] = ()
+        self.working_memory = WorkingMemory()
+
+    @property
+    def short_term_memory(self) -> ShortTermMemory:
+        """摘要和覆盖边界一起读取；原始历史始终由 Agent 保留。"""
+        return ShortTermMemory(self._summary_text, self._summary_keys)
+
+    def memory_state(self) -> dict[str, Any]:
+        """只保存短期层；动态任务/后台状态恢复后必须重新查询。"""
+        return {"version": 1, "short_term": {
+            "summary": self._summary_text, "covered_keys": list(self._summary_keys)}}
+
+    def restore_memory(self, state: Any, history: Sequence[Message]) -> None:
+        """缓存只在原始前缀完全匹配时复用；损坏缓存不破坏完整会话。"""
+        self.reset()
+        if state is None:
+            return
+        try:
+            if not isinstance(state, dict) or state.get("version") != 1:
+                raise ValueError("invalid memory version")
+            short = state["short_term"]
+            summary, keys = short["summary"], short["covered_keys"]
+            if (not isinstance(summary, str) or len(summary) > 1_000_000
+                    or not isinstance(keys, list) or len(keys) > len(history)
+                    or any(not isinstance(key, str) or len(key) != 64 for key in keys)
+                    or bool(summary) != bool(keys)):
+                raise ValueError("invalid short-term memory")
+            offset = 1 if history and history[0].role == "system" else 0
+            groups = _groups(history[offset:])
+            if self._group_keys(groups[:len(keys)]) != tuple(keys):
+                raise ValueError("short-term memory differs from history")
+            self._summary_text, self._summary_keys = summary, tuple(keys)
+        except (KeyError, TypeError, ValueError):
+            self._log("短期记忆与历史不匹配，已丢弃缓存并保留完整会话")
 
     def reset(self) -> None:
         """清除缓存和本轮摘要用量，供 Agent.clear 使用。"""
         self._summary_text = ""
         self._summary_keys = ()
         self.last_summary_usage = None
+        self.working_memory = WorkingMemory()
 
     def estimate_tokens(self, messages: Sequence[Message]) -> int:
         """估算视图大小；这是预算启发式，并非模型真实 tokenizer 计数。"""
@@ -195,7 +231,7 @@ class ContextManager:
 
     def _split(self, history: Sequence[Message], task_state: str | None,
                active_skills: Mapping[str, str] | None = None,
-               background_state: str | None = None
+               background_state: str | None = None, memory_context: str = ""
                ) -> tuple[list[Message], list[tuple[Message, ...]]]:
         """分离系统前缀与可压缩正文；临时任务状态只进入模型视图。"""
         offset = 1 if history and history[0].role == "system" else 0
@@ -215,6 +251,9 @@ class ContextManager:
             prefix.append(Message("system", "Current background state (validated metadata only):\n"
                                   + background_state + "\nRead terminal results with get_background "
                                   "or wait_background before drawing conclusions."))
+        if memory_context:
+            # 长期条目是带来源的历史资料，不能提升为覆盖当前用户要求的 system 指令。
+            prefix.append(memory_message(memory_context))
         return prefix, _groups(history[offset:])
 
     @staticmethod
@@ -300,6 +339,7 @@ class ContextManager:
     def build_view(self, history: Sequence[Message], task_state: str | None = None,
                    *, active_skills: Mapping[str, str] | None = None,
                    background_state: str | None = None,
+                   memory_context: str = "",
                    tool_schemas: Sequence[dict[str, Any]] = ()
                    ) -> list[Message]:
         """检查已有摘要＋未摘要消息的预算，只有再次超阈值才生成新摘要。
@@ -308,15 +348,23 @@ class ContextManager:
         定位摘要覆盖范围，不再作为摘要已生效之后的预算触发依据。
         """
         self.last_summary_usage = None
-        prefix, body = self._split(history, task_state, active_skills, background_state)
+        prefix, body = self._split(history, task_state, active_skills, background_state, memory_context)
+        goal = next((m.content for m in reversed(history) if m.role == "user"), "")
+
+        def working(view: list[Message]) -> list[Message]:
+            self.working_memory = WorkingMemory(goal, task_state or "", background_state or "", tuple(view))
+            return view
         window = self.settings.context_window_tokens
         schema_tokens = self.estimate_schema_tokens(tool_schemas)
+        if memory_context and self.estimate_tokens(prefix) + schema_tokens >= 0.5 * window:
+            # 召回是可选资料，不能挤占系统约定、技能和当前任务的必要空间。
+            prefix, body = self._split(history, task_state, active_skills, background_state)
         if self.estimate_tokens(prefix) + schema_tokens >= 0.9 * window:
             raise ContextError("system prompts, active skills and tool schemas exceed the context window")
         full = self._working_view(prefix, body)
         full_tokens = self.estimate_tokens(full) + schema_tokens
         if full_tokens < 0.5 * window:
-            return full
+            return working(full)
 
         snipped = self.snip_tool_outputs(full)
         snipped_tokens = self.estimate_tokens(snipped) + schema_tokens
@@ -324,7 +372,7 @@ class ContextManager:
             self._log(f"裁剪工作上下文的工具输出：估算 {full_tokens} → {snipped_tokens} token"
                       f"（窗口 {window}）")
         if snipped_tokens < 0.7 * window:
-            return snipped
+            return working(snipped)
 
         view = self.snip_tool_outputs(self._summarized_view(prefix, body, recent=2))
         view_tokens = self.estimate_tokens(view) + schema_tokens
@@ -333,7 +381,7 @@ class ContextManager:
                       f"（窗口 {window}）")
         if view_tokens < 0.9 * window:
             self.validate_tool_message_groups(view)
-            return view
+            return working(view)
 
         self._log(f"摘要后仍接近窗口上限（估算 {view_tokens}/{window} token），开始最终压缩")
         # 只压缩已有摘要和这次额外移出保留区的消息；不重新读取所有旧消息。
@@ -360,4 +408,4 @@ class ContextManager:
         self._summary_text = compact
         self._summary_keys = self._group_keys(body[:boundary])
         self._log(f"最终压缩完成：估算 {view_tokens} → {hard_tokens} token（窗口 {window}）")
-        return hard
+        return working(hard)

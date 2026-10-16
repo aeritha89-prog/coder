@@ -66,6 +66,8 @@ class EditFileTool:
                 # 避免模型给出的模糊锚点误改多个位置。
                 raise ToolFailure(f"old_text matched {count} times; provide a unique exact anchor")
             after = before.replace(old, new, 1)
+            if read_utf8(path) != before:
+                raise ToolFailure("文件在编辑期间发生变化，请重新读取后编辑")
             atomic_write(path, after)
             return limited(diff(path.relative_to(ctx.workspace).as_posix(), before, after),
                            ctx.settings.max_tool_output_chars)

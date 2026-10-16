@@ -19,7 +19,7 @@ from typing import BinaryIO
 from study_coder.sandbox.base import SandboxError
 
 MAX_FILES = 10_000
-MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 # 这些是传输过程本身的上限。策略可以限制工作区总量，但单个导入/导出文件
 # 始终受 MAX_FILE_BYTES 约束。排除规则同时用于导入和导出。
@@ -39,7 +39,7 @@ def _excluded(relative: str, extra: tuple[str, ...] = ()) -> bool:
     """判断 POSIX 相对路径是否应跳过；默认保留 .env.example 模板。
 
     默认规则按每一级路径组件检查，因此被排除的目录及其后代都不会导入。
-    extra 既匹配单个组件，也匹配完整相对路径。
+    extra 既匹配单个组件，也匹配完整相对路径及其父目录；排除目录会排除其后代。
     """
     parts = PurePosixPath(relative).parts
     return (any(part in _EXCLUDED_PARTS for part in parts)
@@ -47,16 +47,30 @@ def _excluded(relative: str, extra: tuple[str, ...] = ()) -> bool:
                    if part.casefold() != ".env.example"
                    for pattern in _EXCLUDED_PATTERNS)
             or any(fnmatch.fnmatch(part, pattern) for part in parts for pattern in extra)
-            or any(fnmatch.fnmatch(relative, pattern) for pattern in extra))
+            or any(fnmatch.fnmatch("/".join(parts[:index]), pattern)
+                   for index in range(1, len(parts) + 1) for pattern in extra))
 
 
-def tar_exclude_patterns() -> tuple[str, ...]:
+def filter_snapshot(snapshot: dict[str, str],
+                    extra_exclude: tuple[str, ...] = ()) -> dict[str, str]:
+    """过滤导入基线，避免导出时新排除的文件被误判为已删除。"""
+    return {path: digest for path, digest in snapshot.items() if not _excluded(path, extra_exclude)}
+
+
+def tar_exclude_patterns(extra_exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
     """返回与路径组件排除规则一致的 GNU tar --exclude 模式。
 
-    GNU tar 会把不含斜杠的模式用于任意层级的路径组件；因此 node_modules
-    能同时跳过根目录和嵌套目录。tar 侧只减少传输量，最终仍由 _excluded 校验。
+    调用 tar 时禁止通配符跨斜杠，让预过滤只排除宿主规则也会排除的路径。
+    自定义规则加 ./ 对应根相对成员名；安全的单组件规则还可匹配任意层级。
+    ?、*.* 等能匹配根操作数 . 的规则只生成带前缀的版本，避免误排除整个工作区。
+    tar 预过滤可以少排除；宿主仍用 _excluded 完整校验并过滤。
     """
-    return tuple(sorted(_EXCLUDED_PARTS))
+    patterns = set(_EXCLUDED_PARTS)
+    for pattern in extra_exclude:
+        patterns.add("./" + pattern)
+        if "/" not in pattern:
+            patterns.add("./*/" + pattern if fnmatch.fnmatch(".", pattern) else pattern)
+    return tuple(sorted(patterns))
 
 
 def _reparse(path: Path) -> bool:
@@ -211,7 +225,8 @@ def extract_export(stream: BinaryIO, staging: Path,
     """流式校验容器导出 tar，写入新 staging 目录并返回文件哈希快照。
 
     输入是二进制 tar 流、目标暂存目录、排除规则和预算；不触碰原工作区。
-    对每个成员先验证名称和配额，再应用排除规则与类型检查；异常使导出任务失败。
+    先校验成员路径、重复项和归档成员数，再排除无需交付的内容；
+    只有保留的文件计入单文件大小、文件数量与总字节配额。
     """
     staging.mkdir(parents=True, exist_ok=False)
     snapshot: dict[str, str] = {}
@@ -231,16 +246,17 @@ def extract_export(stream: BinaryIO, staging: Path,
             count += 1
             if count > max_files * 2:
                 raise SandboxError("export file count limit exceeded")
+            # 排除项不写入交付目录，也不占用交付文件配额；所有成员仍受上面的
+            # 路径、重复项及成员总数检查约束，避免排除规则绕过归档结构限制。
+            if _excluded(relative, extra_exclude):
+                continue
             if member.isfile():
-                # 即便成员随后被排除，也先计入归档预算，防止大量无用数据耗尽资源。
                 file_count += 1
                 if member.size > MAX_FILE_BYTES or file_count > max_files:
                     raise SandboxError(f"export file or count limit exceeded: {relative}")
                 total += member.size
                 if total > max_total_bytes:
                     raise SandboxError("workspace export exceeds configured workspace limit")
-            if _excluded(relative, extra_exclude):
-                continue
             # 被排除的成员不会写入交付物；例如 node_modules 中的硬链接无需
             # 解引用或导出。未排除的链接和特殊文件仍保持拒绝策略。
             if not member.isdir() and not member.isfile():
