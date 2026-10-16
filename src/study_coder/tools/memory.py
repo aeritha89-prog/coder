@@ -37,6 +37,7 @@ def memory_tools() -> list[MemoryTool]:
                     "content": {"type": "string", "maxLength": 2000},
                     "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 8}},
                    ["kind", "key", "content"]),
-        MemoryTool("memory_forget", "Delete one long-term memory from this project by its returned id.",
+        MemoryTool("memory_forget", "Delete one entry from this project's long-term database by its id. "
+                   "This does not erase conversation history, summaries, or background archives.",
                    {"id": {"type": "string", "pattern": "^mem_[0-9a-f]{16}$"}}, ["id"]),
     ]

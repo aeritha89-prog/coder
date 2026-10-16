@@ -358,6 +358,7 @@ class ContextManager:
         schema_tokens = self.estimate_schema_tokens(tool_schemas)
         if memory_context and self.estimate_tokens(prefix) + schema_tokens >= 0.5 * window:
             # 召回是可选资料，不能挤占系统约定、技能和当前任务的必要空间。
+            self._log("本轮未注入长期记忆：前缀与工具定义达到上下文窗口的 50%，优先保留必要上下文")
             prefix, body = self._split(history, task_state, active_skills, background_state)
         if self.estimate_tokens(prefix) + schema_tokens >= 0.9 * window:
             raise ContextError("system prompts, active skills and tool schemas exceed the context window")
