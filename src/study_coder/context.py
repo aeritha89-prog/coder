@@ -231,7 +231,8 @@ class ContextManager:
 
     def _split(self, history: Sequence[Message], task_state: str | None,
                active_skills: Mapping[str, str] | None = None,
-               background_state: str | None = None, memory_context: str = ""
+               background_state: str | None = None, memory_context: str = "",
+               core_memory_context: str = ""
                ) -> tuple[list[Message], list[tuple[Message, ...]]]:
         """分离系统前缀与可压缩正文；临时任务状态只进入模型视图。"""
         offset = 1 if history and history[0].role == "system" else 0
@@ -251,6 +252,9 @@ class ContextManager:
             prefix.append(Message("system", "Current background state (validated metadata only):\n"
                                   + background_state + "\nRead terminal results with get_background "
                                   "or wait_background before drawing conclusions."))
+        if core_memory_context:
+            # 常驻只是加载策略，仍为低于系统约定的资料，不变成系统指令。
+            prefix.append(memory_message(core_memory_context, core=True))
         if memory_context:
             # 长期条目是带来源的历史资料，不能提升为覆盖当前用户要求的 system 指令。
             prefix.append(memory_message(memory_context))
@@ -340,6 +344,7 @@ class ContextManager:
                    *, active_skills: Mapping[str, str] | None = None,
                    background_state: str | None = None,
                    memory_context: str = "",
+                   core_memory_context: str = "",
                    tool_schemas: Sequence[dict[str, Any]] = ()
                    ) -> list[Message]:
         """检查已有摘要＋未摘要消息的预算，只有再次超阈值才生成新摘要。
@@ -348,7 +353,8 @@ class ContextManager:
         定位摘要覆盖范围，不再作为摘要已生效之后的预算触发依据。
         """
         self.last_summary_usage = None
-        prefix, body = self._split(history, task_state, active_skills, background_state, memory_context)
+        prefix, body = self._split(history, task_state, active_skills, background_state,
+                                   memory_context, core_memory_context)
         goal = next((m.content for m in reversed(history) if m.role == "user"), "")
 
         def working(view: list[Message]) -> list[Message]:
@@ -358,8 +364,9 @@ class ContextManager:
         schema_tokens = self.estimate_schema_tokens(tool_schemas)
         if memory_context and self.estimate_tokens(prefix) + schema_tokens >= 0.5 * window:
             # 召回是可选资料，不能挤占系统约定、技能和当前任务的必要空间。
-            self._log("本轮未注入长期记忆：前缀与工具定义达到上下文窗口的 50%，优先保留必要上下文")
-            prefix, body = self._split(history, task_state, active_skills, background_state)
+            self._log("本轮未注入长期记忆中的按需资料：前缀达到窗口的 50%，优先保留必要上下文与常驻资料")
+            prefix, body = self._split(history, task_state, active_skills, background_state,
+                                       core_memory_context=core_memory_context)
         if self.estimate_tokens(prefix) + schema_tokens >= 0.9 * window:
             raise ContextError("system prompts, active skills and tool schemas exceed the context window")
         full = self._working_view(prefix, body)

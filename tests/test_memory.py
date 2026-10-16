@@ -260,7 +260,7 @@ def test_cli_agent_recall_update_and_resume(tmp_path: Path, monkeypatch: pytest.
     import study_coder.cli as cli
 
     store = store_at(tmp_path)
-    store.remember("semantic", "language", "Use Chinese")
+    store.remember("semantic", "language", "Use Chinese", load_policy="always")
     state = tmp_path / "state"
     directory = state / ("a" * 32)
     directory.mkdir(parents=True)
@@ -275,16 +275,18 @@ def test_cli_agent_recall_update_and_resume(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("STUDY_CODER_MEMORY_ENABLED", "true")
     monkeypatch.setattr(cli.DockerRuntime, "start", lambda *args: runtime)
     call = ToolCall("update", "memory_remember", {
-        "kind": "semantic", "key": "language", "content": "Use English"})
+        "kind": "semantic", "key": "language", "content": "Use English",
+        "evidence": "From now on, use English"})
     model = ScriptedLLM([LLMReply("", Message("assistant", "", (call,)), (call,)),
                          LLMReply("done", Message("assistant", "done"))])
     monkeypatch.setattr(cli, "OpenAICompatibleModel", lambda *args, **kwargs: model)
-    inputs = iter(["Update preference", "exit"])
+    inputs = iter(["From now on, use English", "exit"])
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
     assert main(["--yes", "--session", "demo"]) == 0
     assert any("Use Chinese" in m.content for m in model.requests[0])
     assert any("Use English" in m.content for m in model.requests[1])
     assert store.search(kind="semantic")[0].content == "Use English"
+    assert store.search(kind="semantic")[0].load_policy == "always"
     payload = json.loads((state / "history" / "sessions" / "demo.json").read_text(encoding="utf-8"))
     assert payload["version"] == 3 and payload["memory"]["version"] == 1
     assert "Historical project memory" not in str(payload["history"])

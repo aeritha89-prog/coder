@@ -12,7 +12,7 @@ from typing import Callable, Literal
 from study_coder.config import Settings
 from study_coder.context import ContextManager, ModelSummarizer
 from study_coder.llm import ChatModel
-from study_coder.memory import MEMORY_TOOLS, MemoryManager
+from study_coder.memory import MEMORY_TOOLS, MemoryContext, MemoryManager
 from study_coder.permissions import Mode, PermissionPolicy, PermissionRequest
 from study_coder.prompt import SYSTEM_PROMPT
 from study_coder.sandbox.background_runner import TERMINAL
@@ -227,16 +227,21 @@ class Agent:
         origin = f"task={directory.name if directory is not None else 'api'};history_start={start}"
         if self.memory is not None:
             self.memory.origin = origin
-        outcome = self._run_turn(user_text)
-        if self.memory is not None:
-            try:
-                # 来源可定位到该沙箱 sessions/history.json 的消息区间；UUID 仅用于去重键。
-                self.memory.record_episode(user_text, outcome.tool_results, outcome.stop_reason,
-                                           origin + f";history_end={len(self.history)};" + uuid.uuid4().hex)
-            except (ValueError, OSError, sqlite3.Error) as exc:
-                # 长期层暂时不可写不能让已经完成的代码任务变成失败。
-                print(f"[记忆] 情景归档失败：{exc}", file=sys.stderr, flush=True)
-        return outcome
+            self.memory.user_request = user_text
+        try:
+            outcome = self._run_turn(user_text)
+            if self.memory is not None:
+                try:
+                    # 来源可定位到任务会话的消息区间；每次 run 分别归档历史观察。
+                    self.memory.record_episode(user_text, outcome.tool_results, outcome.stop_reason,
+                                               origin + f";history_end={len(self.history)};" + uuid.uuid4().hex)
+                except (ValueError, OSError, sqlite3.Error) as exc:
+                    print(f"[记忆] 情景归档失败：{exc}", file=sys.stderr, flush=True)
+            return outcome
+        finally:
+            if self.memory is not None:
+                # 一个用户请求结束后，旧原话不能再为后续独立写入提供来源证明。
+                self.memory.user_request = None
 
     def _run_turn(self, user_text: str) -> AgentRunResult:
         """运行一个用户任务，直到得到最终答复、触及轮数上限或中断。
@@ -261,17 +266,17 @@ class Agent:
                 # task_state 是 .tasks 的计划摘要，background_state 是命令执行元数据；
                 # 两种状态机独立，命令成功不能自动把计划项标成 completed。
                 background_state = getattr(self.runtime, "get_background_state", lambda: "")()
-                memory_context = ""
+                memory_context = MemoryContext()
                 if self.memory is not None:
                     try:
-                        memory_context = self.memory.recall(user_text + "\n" + task_state, self.context)
+                        memory_context = self.memory.build_context(user_text + "\n" + task_state, self.context)
                     except (ValueError, OSError, sqlite3.Error) as exc:
                         print(f"[记忆] 本轮跳过长期回忆：{exc}", file=sys.stderr, flush=True)
                 model_messages = self.context.build_view(
                     self.history, task_state=task_state,
                     background_state=background_state,
                     active_skills=self.active_skills, tool_schemas=schemas,
-                    memory_context=memory_context)
+                    memory_context=memory_context.related, core_memory_context=memory_context.core)
                 if self.context.last_summary_usage:
                     # 摘要模型也会消耗 token；仅有供应方报告时才累计。
                     summary_usage = self.context.last_summary_usage

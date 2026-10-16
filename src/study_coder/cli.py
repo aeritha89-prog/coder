@@ -14,7 +14,7 @@ from study_coder.agent import Agent
 from study_coder.config import load_settings
 from study_coder.context import ContextManager, ModelSummarizer
 from study_coder.llm import OpenAICompatibleModel
-from study_coder.memory import MEMORY_KINDS, MemoryManager, MemoryStore
+from study_coder.memory import LOAD_POLICIES, MEMORY_KINDS, MemoryManager, MemoryStore
 from study_coder.permissions import Decision, DefaultPermissionPolicy, PermissionRequest
 from study_coder.sandbox.base import SandboxError
 from study_coder.sandbox.docker import (
@@ -125,6 +125,8 @@ def _memory_command(argv: Sequence[str]) -> int:
     command.add_argument("--kind", choices=MEMORY_KINDS)
     command.add_argument("--key")
     command.add_argument("--content")
+    command.add_argument("--load-policy", choices=LOAD_POLICIES)
+    command.add_argument("--priority", type=int, help="always memory priority, 0..100 (default 50)")
     command.add_argument("--limit", type=int, default=20)
     args = command.parse_args(argv)
     try:
@@ -136,11 +138,12 @@ def _memory_command(argv: Sequence[str]) -> int:
             if args.action == "search" and not args.value:
                 command.error("search requires a query")
             value = [asdict(entry) for entry in store.search(
-                args.value or "", kind=args.kind, limit=args.limit)]
+                args.value or "", kind=args.kind, limit=args.limit, load_policy=args.load_policy)]
         elif args.action == "remember":
             if not args.kind or not args.key or not args.content:
                 command.error("remember requires --kind, --key and --content")
-            value = asdict(store.remember(args.kind, args.key, args.content))
+            value = asdict(store.remember(args.kind, args.key, args.content,
+                                         load_policy=args.load_policy, priority=args.priority))
         else:
             value = {"deleted": store.forget(args.value)}
         print(json.dumps(value, ensure_ascii=False, indent=2))
@@ -203,7 +206,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         memory = (MemoryManager(MemoryStore(runtime.directory.parent, settings.workspace,
                                            settings.memory_max_entries),
                                 settings.memory_max_context_tokens, settings.memory_top_k,
-                                settings.memory_auto_episode) if settings.memory_enabled else None)
+                                 settings.memory_auto_episode,
+                                 always_max_context_tokens=settings.memory_always_max_context_tokens,
+                                 always_max_entries=settings.memory_always_max_entries)
+                  if settings.memory_enabled else None)
         policy = DefaultPermissionPolicy(yes=args.yes, ask=ask_permission)
 
         def checkpoint(history: list[Message]) -> None:

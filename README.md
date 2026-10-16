@@ -95,7 +95,31 @@ Agent 根据工具结果继续读取、修改或验证代码，直到完成任�
 
 模型通过 `memory_remember` 保存或更新知识，使用相同的类别和键更新旧条目；通过 `memory_search` 查询，使用 `memory_forget` 删除。写入和删除经过工具权限判断。条目记录来源与更新时间，情景观察包含工具调用编号，可对应到任务对话。
 
-每轮按当前需求自动检索长期记忆。英文按词、中文按双字匹配；偏好和规则也可作为通用候选。只加入预算内的完整条目，不需要 embedding 服务。历史资料以数据形式进入模型输入，当前用户要求优先；文件内容、测试结果和服务状态仍需重新检查。模型显式写入的条目标记为 Agent 笔记，不视为自动验证过的事实。
+长期条目通过 `load_policy` 指定加载方式，偏好主题、`key` 和正文均可自由表达：
+
+- **`always`**：明确的长期偏好或工作规则，每次模型请求前独立读取，无需关键词命中。支持语义、程序性条目，单条正文最多 500 字符。先按 `priority`（0–100，默认 50）降序，再按更新时间降序选取。
+- **`on_demand`**：默认策略，按当前需求检索项目事实、操作步骤和历史观察。英文按词、中文按双字匹配；有查询时仅保留关键词命中的条目。自动情景归档始终使用此策略。
+
+常驻资料不占普通检索的 `top_k`，默认最多选取 8 条、使用 256 token；两路合计仍受长期记忆总预算约束，且不超过上下文窗口的 10%。常驻资料先装入预算，按需知识使用剩余额度；只加入完整条目。`always` 也受预算限制，超额时按优先级选取，并打印数量或预算跳过的统计。必要前缀拥挤时先去掉按需知识，保留已装入的常驻资料；必要输入仍超限时按上下文超限处理。
+
+例如，用户明确表示“以后讲解函数时，先说明输入输出，再逐行讲解”后，模型可以调用：
+
+```json
+{
+  "kind": "semantic",
+  "key": "explanation.function_order",
+  "content": "讲解函数时先说明作用、输入输出，再按执行顺序逐行解释。",
+  "load_policy": "always",
+  "priority": 80,
+  "evidence": "以后讲解函数时，先说明输入输出，再逐行讲解"
+}
+```
+
+宿主会核对 `evidence` 是当前用户输入中的非空原话。创建、修改或降级已有常驻条目都需要这项来源依据，省略 `load_policy` 更新时保留原策略，省略 `priority` 时保留原优先级。来源检查只核对引用确实来自用户，仍需模型正确判断长期意图；“这次简单说一下”等临时要求应留在会话中。CLI 由用户直接操作，可设置常驻条目而无需模型引用。每条记忆应只表达一项可独立更新的知识，避免将身份、偏好和项目事实混在一起。
+
+旧数据库首次打开时在事务中增加加载策略、优先级和索引，原条目保持 `on_demand`，不根据旧正文自动提升为常驻。此版本的两类条目仍按工作区隔离，不跨项目共享。读取时不重复执行建表或写入元数据。更新、删除后，下次请求重新读取当前库，不复用旧的常驻内容。
+
+所有召回内容以带边界提示的 `user` 消息进入模型输入，当前用户要求优先；文件内容、测试结果和服务状态仍需重新检查。一般模型笔记不视为自动验证过的事实，常驻资料也不授予工具权限。
 
 完整对话保存在会话文件中。每次请求会根据上下文预算整理发送给模型的内容：
 
@@ -265,6 +289,8 @@ uv run study-coder -C .\demo-workspace --session demo --stream
 ```powershell
 uv run study-coder memory remember -C .\demo-workspace --kind semantic --key reply_language --content "使用中文回复"
 uv run study-coder memory remember -C .\demo-workspace --kind procedural --key test_command --content "在项目根目录运行 python -m unittest discover -v"
+uv run study-coder memory remember -C .\demo-workspace --kind semantic --key explanation.function_order --content "先解释输入输出，再逐行讲解函数" --load-policy always --priority 80
+uv run study-coder memory list -C .\demo-workspace --load-policy always
 uv run study-coder memory list -C .\demo-workspace
 uv run study-coder memory search "测试" -C .\demo-workspace
 uv run study-coder memory forget mem_替换为实际编号 -C .\demo-workspace
@@ -284,8 +310,10 @@ uv run study-coder memory forget mem_替换为实际编号 -C .\demo-workspace
 | `STUDY_CODER_COMMAND_TIMEOUT_S` | `60` | 前台命令默认超时，秒 |
 | `STUDY_CODER_MAX_TOOL_OUTPUT_CHARS` | `12000` | 工具返回给模型的文本长度上限 |
 | `STUDY_CODER_MEMORY_ENABLED` | `true` | 启用项目长期记忆及对应工具 |
-| `STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS` | `1200` | 每轮召回的 token 预算，同时不超过上下文窗口的 10% |
+| `STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS` | `1200` | 常驻与按需资料的合计 token 预算，同时不超过上下文窗口的 10% |
 | `STUDY_CODER_MEMORY_TOP_K` | `6` | 每轮自动召回的候选条目数 |
+| `STUDY_CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS` | `256` | 常驻资料预算上限，计入总预算，包含边界提示 |
+| `STUDY_CODER_MEMORY_ALWAYS_MAX_ENTRIES` | `8` | 每轮独立读取的常驻候选条目上限 |
 | `STUDY_CODER_MEMORY_MAX_ENTRIES` | `1000` | 每个项目的长期记忆容量 |
 | `STUDY_CODER_MEMORY_AUTO_EPISODE` | `true` | 自动归档本轮工具观察为情景记忆 |
 | `STUDY_CODER_SANDBOX_MAX_COMMAND_TIMEOUT_S` | `1800` | 前台与后台命令允许的最大超时 |

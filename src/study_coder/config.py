@@ -30,6 +30,8 @@ class Settings:
     memory_top_k: int = 6
     memory_max_entries: int = 1000
     memory_auto_episode: bool = True
+    memory_always_max_context_tokens: int = 256
+    memory_always_max_entries: int = 8
 
     def __post_init__(self) -> None:
         """将工作区固定为真实路径，避免相对路径随进程目录变化。"""
@@ -51,7 +53,9 @@ class Settings:
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
         for name, upper in (("memory_max_context_tokens", 32_000), ("memory_top_k", 100),
-                            ("memory_max_entries", 10_000)):
+                            ("memory_max_entries", 10_000),
+                            ("memory_always_max_context_tokens", 32_000),
+                            ("memory_always_max_entries", 100)):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= upper:
                 raise ValueError(f"{name} must be an integer from 1 to {upper}")
@@ -92,4 +96,6 @@ def load_settings(env: Mapping[str, str] | None = None,
         memory_top_k=int(values.get("STUDY_CODER_MEMORY_TOP_K", "6")),
         memory_max_entries=int(values.get("STUDY_CODER_MEMORY_MAX_ENTRIES", "1000")),
         memory_auto_episode=values.get("STUDY_CODER_MEMORY_AUTO_EPISODE", "true").casefold() in {"1", "true", "yes", "on"},
+        memory_always_max_context_tokens=int(values.get("STUDY_CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS", "256")),
+        memory_always_max_entries=int(values.get("STUDY_CODER_MEMORY_ALWAYS_MAX_ENTRIES", "8")),
     )
