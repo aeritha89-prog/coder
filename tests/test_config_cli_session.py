@@ -194,6 +194,19 @@ def test_cli_prints_tool_counts_after_each_task(
     assert "call-1" not in captured.err and "call-2" not in captured.err
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_cli_reports_truncated_reply_as_incomplete(workspace, tmp_path, capsys, monkeypatch,
+                                                  docker_stub, stream):
+    monkeypatch.chdir(tmp_path)
+    reply = LLMReply("partial answer", Message("assistant", "partial answer"), finish_reason="length")
+    monkeypatch.setattr(cli, "OpenAICompatibleModel", lambda *args, **kwargs: ScriptedLLM([reply]))
+    inputs = iter(["implement", "exit"])
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    args = ["-C", str(workspace)] + (["--stream"] if stream else [])
+    assert main(args) == 1
+    assert "模型答复因长度限制被截断" in capsys.readouterr().err
+
+
 def test_cli_interactive_tool_counts_are_per_task(
     workspace: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,

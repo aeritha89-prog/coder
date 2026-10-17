@@ -38,6 +38,10 @@ class WorkspaceRuntime(Protocol):
         """返回有长度上限的任务摘要，供每轮模型请求保留。"""
         ...
 
+    def get_export_issues(self) -> list[str]:
+        """检查当前文件能否交付；不会停止容器或修改项目。"""
+        ...
+
     def get_background_state(self) -> str:
         """返回下一轮模型所需的短状态元数据，不包含原始命令或日志。"""
         ...

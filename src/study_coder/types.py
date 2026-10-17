@@ -43,6 +43,14 @@ class LLMReply:
     assistant_message: Message
     tool_calls: tuple[ToolCall, ...] = ()
     usage: Usage | None = None
+    # None 兼容未报告结束原因的非流式服务和测试模型；流式缺少终止块会被
+    # 适配器明确标为 stream_incomplete，不能把 EOF 当作正常生成结束。
+    finish_reason: str | None = None
+
+    @property
+    def interrupted(self) -> bool:
+        """长度截断、内容过滤和未知结束原因都不能证明本次响应完整。"""
+        return self.finish_reason not in (None, "stop", "tool_calls")
 
 
 @dataclass(frozen=True)
@@ -75,7 +83,10 @@ class AgentRunResult:
     # 本轮未完成的机器标签：tasks_incomplete / background_running /
     # background_unobserved / background_unknown。CLI 据此解释原因；空元组表示
     # 没有此类未完成原因，不表示工具观察中每条命令都执行成功。
+    # 模型响应不完整和文件无法交付也会以独立标签记录。
     incomplete_reasons: tuple[str, ...] = ()
+    # 宿主交付预检发现的文件问题；与模型答复分开，供 CLI 和 API 如实展示。
+    export_issues: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """递归转为普通字典，供调用方序列化或展示。"""

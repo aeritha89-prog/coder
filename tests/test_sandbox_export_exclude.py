@@ -86,6 +86,28 @@ def exporter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     return runtime, commands, payloads
 
 
+def test_preflight_failure_preserves_running_container_and_can_retry_with_exclusion(exporter, monkeypatch):
+    runtime, commands, payloads = exporter
+    runtime.running = True
+    runtime.record["status"] = "running"
+    calls = []
+
+    def inspect(exclusions):
+        calls.append(exclusions)
+        return [] if "large.bin" in exclusions else ["file exceeds export limit: large.bin"]
+
+    monkeypatch.setattr(runtime, "get_export_issues", inspect)
+    with pytest.raises(SandboxError, match="remains running"):
+        runtime.export_changes()
+    assert runtime.running and runtime.record["status"] == "running"
+    assert commands == []
+    payloads.append(_tar([("main.py", b"after")]))
+    diff = runtime.export_changes(extra_exclude=("large.bin",))
+    assert calls[-1] == ("startup-cache", "large.bin")
+    assert "main.py" in diff["modified"] and not runtime.running
+    assert "--hard-dereference" in commands[-1]
+
+
 def test_cli_forwards_repeated_excludes_and_restores_saved_policy(
     exporter: tuple[DockerRuntime, list[list[str]], list[bytes]],
     monkeypatch: pytest.MonkeyPatch,

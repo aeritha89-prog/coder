@@ -220,6 +220,7 @@ class DockerRuntime:
         self.directory = task_dir(policy.state_dir, record["task_id"])
         self.container = record["container"]
         self.volume = record["volume"]
+        self.home_volume = record.get("home_volume", "")
         self.running = record["status"] == "running"
         self.skill_catalog = record.get("skill_catalog", {})
         # self.record 是整个沙箱的生命周期记录；background.jobs 中的 record 才是
@@ -243,6 +244,7 @@ class DockerRuntime:
         directory = task_dir(policy.state_dir, task_id)
         directory.mkdir(parents=True, exist_ok=False)
         volume = f"study-coder-{task_id}"
+        home_volume = f"study-coder-home-{task_id}"
         container = f"study-coder-task-{task_id}"
         task_network = (f"study-coder-net-{task_id}"
                         if policy.service_ports or policy.network == "allowlist" else "")
@@ -250,7 +252,8 @@ class DockerRuntime:
         record: dict[str, Any] = {
             "task_id": task_id, "workspace": str(settings.workspace),
             "image": policy.image, "image_id": info["image_id"],
-            "volume": volume, "container": container, "status": "importing",
+            "volume": volume, "home_volume": home_volume,
+            "container": container, "status": "importing",
             "task_network": task_network,
             "proxy_container": proxy_container,
             "policy": {**asdict(policy), "state_dir": str(policy.state_dir)},
@@ -269,6 +272,10 @@ class DockerRuntime:
             save_record(directory, record)
             _control(["volume", "create", "--label", "study-coder.task=" + task_id,
                       volume], timeout=30)
+            # HOME 是另一个任务专属卷，不复制宿主 HOME，也不参与项目导出。
+            # 镜像中的 /home/agent 归 UID 10001，新卷继承其目录和所有权。
+            _control(["volume", "create", "--label", "study-coder.task=" + task_id,
+                      home_volume], timeout=30)
             # 镜像中的 /workspace 属于 10001；新 volume 继承该目录权限，
             # 因此初始化也可使用非 root 用户，无需临时增加写权限 capability。
             _control(["run", "--rm", "-i", "--network", "none", "--read-only",
@@ -285,7 +292,19 @@ class DockerRuntime:
                           "--opt", "com.docker.network.bridge.gateway_mode_ipv6=isolated",
                           "--label",
                           "study-coder.task=" + task_id, task_network], timeout=30)
-            task_env: list[str] = ["--env", "HOME=/workspace"]
+            cache_env = {
+                "HOME": "/home/agent", "XDG_CACHE_HOME": "/home/agent/.cache",
+                "XDG_CONFIG_HOME": "/home/agent/.config",
+                "XDG_DATA_HOME": "/home/agent/.local/share",
+                "NPM_CONFIG_CACHE": "/home/agent/.npm",
+                "UV_CACHE_DIR": "/home/agent/.cache/uv",
+                "GRADLE_USER_HOME": "/home/agent/.gradle",
+                "CARGO_HOME": "/home/agent/.cargo", "RUSTUP_HOME": "/home/agent/.rustup",
+                "GOPATH": "/home/agent/go", "GOCACHE": "/home/agent/.cache/go-build",
+                "NUGET_PACKAGES": "/home/agent/.nuget/packages",
+                "STUDY_CODER_EXPORT_EXCLUDE": json.dumps(policy.exclude),
+            }
+            task_env = [arg for key, value in cache_env.items() for arg in ("--env", key + "=" + value)]
             if proxy_container:
                 # 代理有外网桥接接口，任务容器只进 internal 网络；随机令牌仅传给本任务。
                 proxy_token = secrets.token_urlsafe(32)
@@ -343,6 +362,7 @@ class DockerRuntime:
                       "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g",
                       *task_env, "--workdir", "/workspace",
                       "--mount", f"type=volume,src={volume},dst=/workspace",
+                      "--mount", f"type=volume,src={home_volume},dst=/home/agent",
                       info["image_id"], "sleep", "infinity"], timeout=60)
             # 长寿命容器只保持 volume 可用；每次工具调用另起短命 Worker。
             runtime.running = True
@@ -359,7 +379,8 @@ class DockerRuntime:
             # cleanup_failed 表示资源可能仍存活，不能把它误报为完全清理。
             cleanup_errors: list[str] = []
             for kind, name in (("container", container), ("container", proxy_container),
-                               ("network", task_network), ("volume", volume)):
+                               ("network", task_network), ("volume", volume),
+                               ("volume", home_volume)):
                 if not name:
                     continue
                 try:
@@ -717,6 +738,29 @@ class DockerRuntime:
         if state != "false":
             raise SandboxError("sandbox container is still running")
 
+    def get_export_issues(self, exclusions: tuple[str, ...] | None = None) -> list[str]:
+        """在容器中执行宿主可信预检，返回有界列表，不停止任务或修改文件。"""
+        if not self.running:
+            raise SandboxError("sandbox container is stopped")
+        selected = exclusions if exclusions is not None else (
+            *self.policy.exclude, *self.record.get("export_exclude", []))
+        options = json.dumps({"extra_exclude": selected,
+                              "max_total_bytes": self.policy.workspace_max_bytes,
+                              "max_files": self.policy.workspace_max_files})
+        # Python 脚本来自安装位置的 transfer.py，模型只能影响 JSON 中的项目
+        # 文件，不能指定脚本或宿主路径。使用 stdin 也兼容仍在旧镜像中的任务。
+        raw = _control(["exec", "-i", self.container, "/opt/study-coder/.venv/bin/python",
+                        "-I", "-B", "-", options], timeout=30,
+                       stdin_file=Path(__file__).with_name("transfer.py"))
+        try:
+            issues = json.loads(raw)
+        except ValueError as exc:
+            raise SandboxError("invalid export preflight response; rebuild the sandbox image") from exc
+        if (not isinstance(issues, list) or len(issues) > 21
+                or any(not isinstance(item, str) or len(item) > 2000 for item in issues)):
+            raise SandboxError("invalid export preflight response")
+        return issues
+
     def export_changes(self, *, extra_exclude: tuple[str, ...] = ()) -> dict[str, list[str]]:
         """停止任务容器，从只读 volume 导出到 staging，返回差异表。
 
@@ -745,6 +789,14 @@ class DockerRuntime:
             # 先持久化显式选择，控制、归档或 tar 失败后再次 export 可继续使用。
             save_record(self.directory, self.record)
         exclusions = (*self.policy.exclude, *self.record.get("export_exclude", []))
+        if self.running:
+            issues = self.get_export_issues(exclusions)
+            if issues:
+                # 在 stop/shutdown 前返回，保留模型可修复的运行环境与唯一文件来源。
+                # --exclude 仍须用户明确指定，不静默丢弃任何不符合交付规则的产物。
+                raise SandboxError("export preflight failed; sandbox task " + self.record["task_id"]
+                                   + " remains running. Fix these files or retry sandbox export with "
+                                   "--exclude PATTERN:\n" + "\n".join(issues))
         if not self.running:
             self._ensure_stopped()
             # 容器先前已停，未归档任务不能凭旧状态推断成功；显式记录 lost。
@@ -780,7 +832,7 @@ class DockerRuntime:
                    "--network", "none", "--read-only", "--cap-drop", "ALL",
                    "--security-opt", "no-new-privileges", "--user", "10001:10001",
                    "--mount", f"type=volume,src={self.volume},dst=/workspace,readonly",
-                   export_image, "tar", "-C", "/workspace", "-cf", "-",
+                   export_image, "tar", "--hard-dereference", "-C", "/workspace", "-cf", "-",
                    "--no-wildcards-match-slash",
                    *[f"--exclude={name}" for name in tar_exclude_patterns(exclusions)], "."]
         # 导出容器只读挂载同一 volume，tar 写到 stdout，宿主再逐成员校验。
@@ -872,6 +924,8 @@ class DockerRuntime:
             if isinstance(task_network, str) and task_network:
                 _remove_owned_resource("network", task_network, self.record["task_id"])
             _remove_owned_resource("volume", self.volume, self.record["task_id"])
+            if self.home_volume:
+                _remove_owned_resource("volume", self.home_volume, self.record["task_id"])
         except SandboxError as exc:
             self.record["cleanup_error"] = str(exc)
             save_record(self.directory, self.record)
@@ -999,7 +1053,8 @@ def cleanup_task(policy: SandboxPolicy, task_id: str, *, discard: bool = False) 
         # Verified changes are already stored in the task directory.
         pass
     for kind, name_key in (("container", "container"), ("container", "proxy_container"),
-                           ("network", "task_network"), ("volume", "volume")):
+                           ("network", "task_network"), ("volume", "volume"),
+                           ("volume", "home_volume")):
         name = record.get(name_key)
         if isinstance(name, str) and name:
             _remove_owned_resource(kind, name, task_id)

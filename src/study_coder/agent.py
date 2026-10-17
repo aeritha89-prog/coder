@@ -299,7 +299,10 @@ class Agent:
                 if reply.assistant_message.role != "assistant" or tuple(reply.tool_calls) != reply.assistant_message.tool_calls:
                     # 阻止工具调用列表与历史中实际记录的 assistant 消息分叉。
                     raise ValueError("model reply and assistant message disagree")
-                self.history.append(reply.assistant_message)
+                # 不把截断响应中的调用写入历史或执行；即使自定义模型绕过适配器，
+                # 这里仍保证后续对话里没有悬空的工具调用。
+                self.history.append(Message("assistant", reply.text)
+                                    if reply.interrupted else reply.assistant_message)
                 if reply.usage:
                     usage_available = True
                     self.usage_available = True
@@ -309,19 +312,33 @@ class Agent:
                         self.total_usage.prompt_tokens + reply.usage.prompt_tokens,
                         self.total_usage.completion_tokens + reply.usage.completion_tokens,
                     )
+                if reply.interrupted:
+                    reason = {"length": "model_output_truncated",
+                              "content_filter": "model_content_filtered"}.get(
+                                  reply.finish_reason or "", "model_response_incomplete")
+                    return AgentRunResult(reply.text, "incomplete", rounds, list(self.history),
+                                          results, Usage(prompt_tokens, completion_tokens)
+                                          if usage_available else None,
+                                          tool_call_counts=dict(tool_call_counts),
+                                          incomplete_reasons=(reason,))
                 if not reply.tool_calls:
                     if reply.text.strip():
                         incomplete_task = self.runtime.get_incomplete_tasks()
                         # reasons 汇总计划未完成和后台未完成原因；没有额外模型重试。
                         # reply.text 可以已显示给用户，但宿主仍须如实判定本轮完成状态。
-                        reasons = (("tasks_incomplete",) if incomplete_task else ())
+                        reasons: tuple[str, ...] = (("tasks_incomplete",) if incomplete_task else ())
                         reasons += getattr(self.runtime, "get_background_pending", lambda: ())()
+                        # 模型文字结束只说明生成结束；文件也必须符合当前导出规则。
+                        export_issues = tuple(getattr(self.runtime, "get_export_issues", lambda: ())())
+                        if export_issues:
+                            reasons += ("workspace_unexportable",)
                         stop_reason: Literal["completed", "incomplete"] = "incomplete" if reasons else "completed"
                         return AgentRunResult(reply.text, stop_reason, rounds, list(self.history),
                                               results, Usage(prompt_tokens, completion_tokens)
                                               if usage_available else None,
                                               tool_call_counts=dict(tool_call_counts),
-                                              incomplete_reasons=reasons)
+                                              incomplete_reasons=reasons,
+                                              export_issues=export_issues)
                     # 空文本也没有工具调用时，给模型一次明确的继续指令。
                     self.history.append(Message("system", "The previous assistant response was "
                                                 "empty. Return a final answer or request a tool."))

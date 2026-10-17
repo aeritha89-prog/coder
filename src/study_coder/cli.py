@@ -257,10 +257,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             descriptions = {"tasks_incomplete": "计划仍有未完成事项",
                             "background_running": "后台命令仍在运行",
                             "background_unobserved": "后台结果尚未交付",
-                            "background_unknown": "后台状态尚未确认"}
+                            "background_unknown": "后台状态尚未确认",
+                            "model_output_truncated": "模型答复因长度限制被截断，可继续对话",
+                            "model_content_filtered": "模型答复被内容过滤中断",
+                            "model_response_incomplete": "模型响应未完整结束",
+                            "workspace_unexportable": "工作区包含无法交付的文件"}
             reasons = outcome.incomplete_reasons or ("tasks_incomplete",)
             print("[任务] " + "；".join(descriptions.get(r, r) for r in reasons)
                   + "，本轮已结束。", file=sys.stderr, flush=True)
+            for issue in outcome.export_issues:
+                print("[交付检查] " + issue, file=sys.stderr, flush=True)
         try:
             if args.session:
                 save_session(session_root, args.session, settings, agent.history, agent.skill_state(),

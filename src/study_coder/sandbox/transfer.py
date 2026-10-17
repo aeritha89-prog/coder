@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tarfile
 import tempfile
 import uuid
@@ -178,6 +179,7 @@ def create_import_archive(root: Path, archive: Path,
     if not root.is_dir():
         raise SandboxError("workspace is not a directory")
     snapshot: dict[str, str] = {}
+    seen: set[str] = set()
     total = 0
     archive.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "w") as output:
@@ -190,6 +192,10 @@ def create_import_archive(root: Path, archive: Path,
                 if _excluded(relative, extra_exclude):
                     dirs.remove(name)
                     continue
+                _safe_name(relative)
+                if relative.casefold() in seen:
+                    raise SandboxError(f"case-colliding workspace path: {relative}")
+                seen.add(relative.casefold())
                 if _reparse(path) or not path.is_dir():
                     raise SandboxError(f"unsupported workspace entry: {relative}")
                 # tar 只记录简单目录元数据，不携带宿主所有者及额外权限。
@@ -202,6 +208,10 @@ def create_import_archive(root: Path, archive: Path,
                 relative = path.relative_to(root).as_posix()
                 if _excluded(relative, extra_exclude):
                     continue
+                _safe_name(relative)
+                if relative.casefold() in seen:
+                    raise SandboxError(f"case-colliding workspace path: {relative}")
+                seen.add(relative.casefold())
                 if len(snapshot) >= max_files:
                     raise SandboxError(f"workspace file or count limit exceeded: {relative}")
                 data, file_info = _read_stable_file(path, relative)
@@ -216,6 +226,75 @@ def create_import_archive(root: Path, archive: Path,
                 info.mode = 0o755 if file_info.st_mode & stat.S_IXUSR else 0o644
                 output.addfile(info, io.BytesIO(data))
     return snapshot
+
+
+def export_issues(root: Path, extra_exclude: tuple[str, ...] = (), *,
+                  max_total_bytes: int = MAX_TOTAL_BYTES,
+                  max_files: int = MAX_FILES) -> list[str]:
+    """不打包、不改文件，预检当前工作区是否满足交付规则。
+
+    复用解包端的路径、排除和单文件上限。运行中的检查只是当时的观察；
+    停止所有写入者后的 tar 校验仍是最终裁决，不用预检替代安全校验。
+    最多返回 20 条具体问题和一条省略提示，避免大目录撑满模型输入。
+    """
+    issues: list[str] = []
+    seen: set[str] = set()
+    total = files = members = 0
+    if not root.is_dir():
+        return ["workspace is unavailable"]
+    def walk_error(exc: OSError) -> None:
+        if len(issues) < 21:
+            issues.append(str(exc)[:500])
+
+    for base, dirs, names in os.walk(root, followlinks=False, onerror=walk_error):
+        current = Path(base)
+        for name in (*dirs[:], *names):
+            path = current / name
+            relative = path.relative_to(root).as_posix()
+            directory = name in dirs
+            if _excluded(relative, extra_exclude):
+                if directory:
+                    dirs.remove(name)
+                continue
+            try:
+                _safe_name(relative)
+                folded = relative.casefold()
+                if folded in seen:
+                    raise SandboxError(f"case-colliding export path: {relative}")
+                seen.add(folded)
+                info = path.lstat()
+                if _reparse(path) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                    raise SandboxError(f"unsupported export entry: {relative}")
+                members += 1
+                if stat.S_ISREG(info.st_mode):
+                    files += 1
+                    previous = total
+                    total += info.st_size
+                    if info.st_size > MAX_FILE_BYTES:
+                        issues.append(f"file exceeds export limit ({MAX_FILE_BYTES} bytes): {relative}"[:500])
+                    if previous <= max_total_bytes < total:
+                        issues.append("workspace export exceeds configured workspace limit")
+                if members > max_files * 2 or files > max_files:
+                    issues.append("export file count limit exceeded")
+                    return issues[:20]
+            except FileNotFoundError:
+                # 并发程序可以创建后立即删除临时文件；最终冻结校验不会跳过成员。
+                continue
+            except (SandboxError, OSError) as exc:
+                issues.append(str(exc)[:500])
+                if directory:
+                    dirs.remove(name)
+            if len(issues) > 20:
+                return issues[:20] + ["additional export issues omitted"]
+    return issues[:20]
+
+
+def runtime_export_issues(root: Path, max_bytes: int, max_files: int) -> list[str]:
+    """容器内前台、后台和服务共用启动时固定的宿主排除规则。"""
+    exclude = json.loads(os.environ.get("STUDY_CODER_EXPORT_EXCLUDE", "[]"))
+    if not isinstance(exclude, list) or any(not isinstance(item, str) for item in exclude):
+        raise SandboxError("invalid sandbox export exclusions")
+    return export_issues(root, tuple(exclude), max_total_bytes=max_bytes, max_files=max_files)
 
 
 def extract_export(stream: BinaryIO, staging: Path,
@@ -544,3 +623,10 @@ def apply_changes(root: Path, staging: Path, before: dict[str, str],
             raise
         raise SandboxError(f"sandbox apply failed and was rolled back: {exc}") from exc
     return diff
+
+
+if __name__ == "__main__":
+    # 宿主把此可信文件作为 stdin 交给容器解释器，参数单独用 JSON 传入。
+    # 已有任务的镜像即使没有新预检函数，也能用当前宿主的同一套交付规则。
+    # 这里只读 /workspace；上述应用/恢复函数仅定义，不会在这个入口执行。
+    print(json.dumps(export_issues(Path("/workspace"), **json.loads(sys.argv[1]))))

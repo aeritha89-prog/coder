@@ -61,17 +61,34 @@ def to_provider_messages(messages: list[Message]) -> list[dict[str, Any]]:
     return result
 
 
-def _reply(text: str, calls: list[ToolCall], usage: Usage | None = None) -> LLMReply:
+def _reply(text: str, calls: list[ToolCall], usage: Usage | None = None,
+           finish_reason: str | None = None) -> LLMReply:
     """让展示文本、历史消息和工具列表来自同一份解析结果。"""
     message = Message("assistant", text, tuple(calls))
-    return LLMReply(text, message, tuple(calls), usage)
+    return LLMReply(text, message, tuple(calls), usage, finish_reason)
+
+
+def _finish_reason(choice: Any) -> str | None:
+    """兼容未提供该字段的服务，但拒绝非字符串结束原因。"""
+    reason = getattr(choice, "finish_reason", None)
+    if reason is not None and (not isinstance(reason, str) or not reason):
+        raise ModelProtocolError("model returned invalid finish_reason")
+    return reason
 
 
 def normalize_completion(completion: Any) -> LLMReply:
     """解析非流式响应；工具参数必须是完整的 JSON 对象。"""
-    choice = completion.choices[0].message
+    choice = completion.choices[0]
+    reason = _finish_reason(choice)
+    message = choice.message
+    raw_usage = getattr(completion, "usage", None)
+    usage = (Usage(raw_usage.prompt_tokens, raw_usage.completion_tokens)
+             if raw_usage is not None else None)
+    # 即使被截断的参数恰好能解析为 JSON，也不能执行：后续片段可能尚未生成。
+    if reason not in (None, "stop", "tool_calls"):
+        return _reply(message.content or "", [], usage, reason)
     calls: list[ToolCall] = []
-    for raw in choice.tool_calls or []:
+    for raw in message.tool_calls or []:
         try:
             arguments = json.loads(raw.function.arguments)
         except json.JSONDecodeError as exc:
@@ -79,10 +96,9 @@ def normalize_completion(completion: Any) -> LLMReply:
         if not isinstance(arguments, dict):
             raise ModelProtocolError("tool arguments must be a JSON object")
         calls.append(ToolCall(raw.id, raw.function.name, arguments))
-    raw_usage = getattr(completion, "usage", None)
-    usage = (Usage(raw_usage.prompt_tokens, raw_usage.completion_tokens)
-             if raw_usage is not None else None)
-    return _reply(choice.content or "", calls, usage)
+    if reason == "tool_calls" and not calls:
+        reason = "stream_incomplete"
+    return _reply(message.content or "", calls, usage, reason)
 
 
 def collect_stream(chunks: Iterable[Any], on_text: Callable[[str], None] | None = None) -> LLMReply:
@@ -94,6 +110,7 @@ def collect_stream(chunks: Iterable[Any], on_text: Callable[[str], None] | None 
     parts: list[str] = []
     calls: dict[int, dict[str, str]] = {}
     usage: Usage | None = None
+    finish_reason: str | None = None
     for chunk in chunks:
         raw_usage = getattr(chunk, "usage", None)
         if raw_usage is not None:
@@ -101,7 +118,13 @@ def collect_stream(chunks: Iterable[Any], on_text: Callable[[str], None] | None 
         if not chunk.choices:
             # 部分供应方在无 choice 的尾块中单独发送 token 用量。
             continue
-        delta = chunk.choices[0].delta
+        choice = chunk.choices[0]
+        reason = _finish_reason(choice)
+        if reason is not None:
+            if finish_reason is not None and reason != finish_reason:
+                raise ModelProtocolError("stream returned conflicting finish reasons")
+            finish_reason = reason
+        delta = choice.delta
         if delta.content:
             parts.append(delta.content)
             if on_text:
@@ -117,6 +140,10 @@ def collect_stream(chunks: Iterable[Any], on_text: Callable[[str], None] | None 
                     current["name"] += function.name
                 if function.arguments:
                     current["arguments"] += function.arguments
+    # TCP/迭代器结束不等于模型正常结束。保留已显示文本，但丢弃尚不能确认
+    # 完整性的工具调用，历史中也不会留下没有对应结果的 assistant 调用组。
+    if finish_reason not in ("stop", "tool_calls"):
+        return _reply("".join(parts), [], usage, finish_reason or "stream_incomplete")
     parsed: list[ToolCall] = []
     # 只有收完所有块后才检查调用完整性，避免执行半截 JSON。
     for index in sorted(calls):
@@ -128,7 +155,9 @@ def collect_stream(chunks: Iterable[Any], on_text: Callable[[str], None] | None 
         if not item["id"] or not item["name"] or not isinstance(arguments, dict):
             raise ModelProtocolError(f"invalid tool call at index {index}")
         parsed.append(ToolCall(item["id"], item["name"], arguments))
-    return _reply("".join(parts), parsed, usage)
+    if finish_reason == "tool_calls" and not parsed:
+        finish_reason = "stream_incomplete"
+    return _reply("".join(parts), parsed, usage, finish_reason)
 
 
 def should_retry(error: Exception) -> bool:

@@ -71,6 +71,36 @@ def test_final_without_tool(workspace: Path) -> None:
     assert result.to_dict()["tool_call_counts"] == {}
 
 
+@pytest.mark.parametrize("reason, expected", [
+    ("length", "model_output_truncated"),
+    ("content_filter", "model_content_filtered"),
+    ("stream_incomplete", "model_response_incomplete"),
+])
+def test_interrupted_reply_does_not_execute_calls_or_claim_completion(workspace, reason, expected):
+    tool = ToolCall("partial", "write_file", {"path": "must-not-exist", "content": "x"})
+    partial = LLMReply("partial", Message("assistant", "partial", (tool,)),
+                       (tool,), finish_reason=reason)
+    instance, model = agent(workspace, [partial, final("finished after user continued")])
+    result = instance.run("implement")
+    assert result.stop_reason == "incomplete" and result.incomplete_reasons == (expected,)
+    assert result.text == "partial" and result.tool_call_counts == {}
+    assert not (workspace / "must-not-exist").exists()
+    assert not result.history[-1].tool_calls
+    instance.context.validate_tool_message_groups(result.history)
+    assert len(model.requests) == 1
+    assert instance.run("continue").stop_reason == "completed"
+
+
+def test_final_reply_cannot_hide_unexportable_files(workspace, monkeypatch):
+    instance, _ = agent(workspace, [final("done")])
+    problems = ["file exceeds export limit: weights.bin"]
+    monkeypatch.setattr(instance.runtime, "get_export_issues", lambda: problems, raising=False)
+    result = instance.run("finish the project")
+    assert result.stop_reason == "incomplete"
+    assert "workspace_unexportable" in result.incomplete_reasons
+    assert result.export_issues == tuple(problems)
+
+
 def test_pending_task_yields_to_user_without_another_model_round(workspace: Path) -> None:
     text = "Please provide the model service address."
     instance, model = agent(workspace, [final(text)])

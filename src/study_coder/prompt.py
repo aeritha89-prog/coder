@@ -8,6 +8,10 @@ only installed tools can run. Do not assume Windows paths or host environment va
 Tool errors are observations. Report only tests confirmed by successful tool results.
 The default command timeout is 60 seconds; choose a longer timeout_s when appropriate, within
 the configured task limit. Files are exported for host review after the task.
+User-level caches belong in HOME=/home/agent and the supplied cache environment paths;
+this separate task volume is not exported. Keep project deliverables in /workspace.
+Export preflight errors name files that cannot be delivered (for example oversized files or
+symbolic links). Fix them before claiming completion; never silently discard user deliverables.
 When start_service is available, use only its listed ports and keep the server in the foreground;
 stop it with stop_service when finished. Preview ports are bound to host loopback only.
 When background tools are available, start_background runs a finite command and returns a job_id.

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from study_coder.sandbox.service_runner import _kill_descendants, _workspace_usage
+from study_coder.sandbox.transfer import runtime_export_issues
 
 # ROOT 是容器内部控制目录；放在 /tmp，避免被 /workspace 的导出流程带回项目。
 ROOT = Path("/tmp/study-coder-background")
@@ -508,6 +509,13 @@ def _run(identifier: str) -> int:
         if read_errors:
             status, reason = "failed", "output_read_failed"
         try:
+            # 先清理后代再检查最终文件，避免快速退出的命令绕过运行中扫描。
+            if status == "succeeded":
+                issues = runtime_export_issues(Path("/workspace"), record["workspace_max_bytes"],
+                                               record["workspace_max_files"])
+                if issues:
+                    status, reason = "failed", "workspace_unexportable: " + issues[0]
+                    log.append(("\n[export preflight failed]\n" + "\n".join(issues)).encode("utf-8"))
             # 顺序是：确认清理 -> 等输出读取结束 -> 最终日志 -> 最终状态。
             flush()
             record.update(status=status if clean else "lost", reason=reason if clean else "cleanup_failed",

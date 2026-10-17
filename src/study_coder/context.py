@@ -67,7 +67,7 @@ class ModelSummarizer:
                         "Be concise; do not request tools."),
                 Message("user", prompt),
             ], [])
-            if reply.tool_calls or not reply.text.strip():
+            if reply.interrupted or reply.tool_calls or not reply.text.strip():
                 # 摘要必须是最终文本；空回答或工具调用无法用来恢复旧状态。
                 raise ContextError("summarizer returned no usable summary")
             current = reply.text.strip()

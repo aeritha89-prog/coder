@@ -18,6 +18,7 @@ from typing import Any
 
 from study_coder.config import Settings
 from study_coder.sandbox.base import SANDBOX_TOOLS
+from study_coder.sandbox.transfer import runtime_export_issues
 from study_coder.tools.background import BACKGROUND_TOOLS
 from study_coder.tools.base import ToolContext, ToolFailure, resolve_workspace_path, text_arg
 from study_coder.tools.edit import EditFileTool, WriteFileTool
@@ -441,7 +442,12 @@ def _shell(arguments: dict[str, Any], timeout_s: int, output_bytes: int,
     note = "\n[command output truncated]" if truncated.is_set() else ""
     message = (f"exit code: {process.returncode}; elapsed: {time.monotonic() - start:.2f}s\n"
                f"stdout:\n{stdout}\nstderr:\n{stderr}{note}")
-    return ToolResult("", "bash", message, process.returncode != 0)
+    # 短命令可能在 0.5 秒监测间隔内完成，所以退出后仍检查交付条件。
+    # 不删除阻塞文件：模型可继续用 bash 修复，用户也可显式追加导出排除规则。
+    issues = runtime_export_issues(WORKSPACE, workspace_max_bytes, workspace_max_files)
+    if issues:
+        message += "\n[export preflight failed]\n" + "\n".join(issues)
+    return ToolResult("", "bash", message, process.returncode != 0 or bool(issues))
 
 
 def execute(request: dict[str, Any]) -> ToolResult:
@@ -507,6 +513,11 @@ def execute(request: dict[str, Any]) -> ToolResult:
     final_size, final_files = _workspace_usage(workspace_max_bytes, workspace_max_files)
     if final_size > workspace_max_bytes or final_files > workspace_max_files:
         return ToolResult("", name, "Error: sandbox workspace size or file limit exceeded", True)
+    if name in {"write_file", "edit_file"} and not result.is_error:
+        issues = runtime_export_issues(WORKSPACE, workspace_max_bytes, workspace_max_files)
+        if issues:
+            return ToolResult("", name, result.content + "\n[export preflight failed]\n"
+                              + "\n".join(issues), True)
     return result
 
 
