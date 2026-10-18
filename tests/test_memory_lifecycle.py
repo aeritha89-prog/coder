@@ -236,7 +236,9 @@ def test_projection_retains_actionable_revision_errors_and_compact_episode_bindi
     entry = store.remember("episodic", "build", "old failure")
     call = ToolCall("call", "memory_remember", {"key": "build", "content": "changed"})
     error = Message("tool", "Error: updating memory requires expected_revision; read its current version first", call_id=call.id)
-    assert manager.projection.project_messages([Message("assistant", "", (call,)), error])[-1] == error
+    projected = manager.projection.project_messages([Message("assistant", "", (call,)), error])
+    result = json.loads(projected[0].content.split("\n", 1)[1])[0]["result"]
+    assert result["state"] == "error" and result["error"] == error.content
     compact = tool_group("memory_read", {"id": entry.id}, {"id": entry.id, "revision": 1, "truncated": True})
     store.remember("episodic", "build", "new success")
     view = manager.projection.project_messages(compact)

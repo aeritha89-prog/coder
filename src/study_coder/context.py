@@ -13,7 +13,12 @@ from study_coder.config import Settings
 from study_coder.llm import ChatModel
 from study_coder.memory import ShortTermMemory, WorkingMemory, memory_message
 from study_coder.memory_budget import estimate_tokens
-from study_coder.memory_view import MAX_REFERENCES, MemoryProjection, valid_reference
+from study_coder.memory_view import (
+    MAX_REFERENCES,
+    MEMORY_OBSERVATION_HEADER,
+    MemoryProjection,
+    valid_reference,
+)
 from study_coder.types import Message, Usage
 
 
@@ -224,10 +229,11 @@ class ContextManager:
         _groups(messages)
 
     def snip_tool_outputs(self, messages: Sequence[Message], maximum: int = 1_800) -> list[Message]:
-        """只压短工具输出，保留用户问题和工具调用参数。"""
+        """裁剪工具输出和已折叠的记忆观察，保留用户问题及真实工具参数。"""
         return [Message(message.role, _snip(message.content, maximum),
                         message.tool_calls, message.call_id)
-                if message.role == "tool" else message for message in messages]
+                if message.role == "tool" or (message.role == "assistant"
+                    and message.content.startswith(MEMORY_OBSERVATION_HEADER)) else message for message in messages]
 
     def _split(self, history: Sequence[Message], task_state: str | None,
                active_skills: Mapping[str, str] | None = None,
