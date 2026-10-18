@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from typing import Any, Protocol
 from study_coder.config import Settings
 from study_coder.llm import ChatModel
 from study_coder.memory import ShortTermMemory, WorkingMemory, memory_message
+from study_coder.memory_budget import estimate_tokens
 from study_coder.types import Message, Usage
 
 
@@ -196,17 +196,7 @@ class ContextManager:
 
     def estimate_tokens(self, messages: Sequence[Message]) -> int:
         """估算视图大小；这是预算启发式，并非模型真实 tokenizer 计数。"""
-        def size(value: str) -> float:
-            # 中文等非 ASCII 字符按 1，ASCII 字符按 0.25 估算。
-            return sum(1.0 if ord(char) > 127 else 0.25 for char in value)
-
-        total = 0.0
-        for message in messages:
-            total += 6 + size(message.content)
-            for call in message.tool_calls:
-                total += 8 + size(call.name) + size(call.id)
-                total += size(json.dumps(call.arguments, ensure_ascii=False))
-        return math.ceil(total)
+        return estimate_tokens(messages)
 
     def estimate_schema_tokens(self, schemas: Sequence[dict[str, Any]]) -> int:
         """工具 schema 也占输入窗口；沿用消息估算的字符启发式。"""
@@ -293,7 +283,8 @@ class ContextManager:
         if users:
             keep.add(users[-1])
         self._log(f"复用已有摘要：累计覆盖 {covered} 组，未摘要 {len(groups) - covered} 组")
-        return (prefix + [Message("system", "Earlier conversation summary:\n" + self._summary_text)]
+        return (prefix + [Message("user", "Earlier conversation summary (data):\n"
+                                 + self._summary_text)]
                 + _flatten([group for index, group in enumerate(groups) if index in keep]))
 
     def _summary_for(self, older: Sequence[tuple[Message, ...]]) -> str:
@@ -404,7 +395,7 @@ class ContextManager:
             keep.add(users[-1])
         hard = list(prefix)
         if compact:
-            hard.append(Message("system", "Earlier work (compressed):\n" + compact))
+            hard.append(Message("user", "Earlier work (compressed):\n" + compact))
         hard.extend(self.snip_tool_outputs(
             _flatten([group for index, group in enumerate(body) if index in keep]), maximum=384))
         self.validate_tool_message_groups(hard)

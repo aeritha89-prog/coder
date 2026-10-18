@@ -133,6 +133,11 @@ def _memory_command(argv: Sequence[str]) -> int:
         settings = load_settings()
         settings = replace(settings, workspace=args.workspace or settings.workspace)
         store = MemoryStore(load_policy().state_dir, settings.workspace, settings.memory_max_entries)
+        manager = MemoryManager(store, settings.memory_max_context_tokens, settings.memory_top_k,
+                                settings.memory_auto_episode,
+                                always_max_context_tokens=settings.memory_always_max_context_tokens,
+                                always_max_entries=settings.memory_always_max_entries,
+                                context_window_tokens=settings.context_window_tokens)
         value: Any
         if args.action in {"list", "search"}:
             if args.action == "search" and not args.value:
@@ -142,8 +147,8 @@ def _memory_command(argv: Sequence[str]) -> int:
         elif args.action == "remember":
             if not args.kind or not args.key or not args.content:
                 command.error("remember requires --kind, --key and --content")
-            value = asdict(store.remember(args.kind, args.key, args.content,
-                                         load_policy=args.load_policy, priority=args.priority))
+            value = manager.remember(args.kind, args.key, args.content,
+                                     load_policy=args.load_policy, priority=args.priority)
         else:
             value = {"deleted": store.forget(args.value)}
         print(json.dumps(value, ensure_ascii=False, indent=2))
@@ -208,7 +213,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 settings.memory_max_context_tokens, settings.memory_top_k,
                                  settings.memory_auto_episode,
                                  always_max_context_tokens=settings.memory_always_max_context_tokens,
-                                 always_max_entries=settings.memory_always_max_entries)
+                                  always_max_entries=settings.memory_always_max_entries,
+                                  context_window_tokens=settings.context_window_tokens)
                   if settings.memory_enabled else None)
         policy = DefaultPermissionPolicy(yes=args.yes, ask=ask_permission)
 
