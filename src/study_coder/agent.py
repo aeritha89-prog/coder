@@ -45,6 +45,8 @@ class Agent:
         self.history_checkpoint = history_checkpoint
         self.model_activity = model_activity
         self.memory = memory
+        if memory is not None:
+            self.context.memory_projector = memory.projection
         self.history: list[Message] = [Message("system", system_prompt)]
         self.active_skills: dict[str, str] = {}
         self.total_usage = Usage()

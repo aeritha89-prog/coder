@@ -276,7 +276,7 @@ def test_cli_agent_recall_update_and_resume(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(cli.DockerRuntime, "start", lambda *args: runtime)
     call = ToolCall("update", "memory_remember", {
         "kind": "semantic", "key": "language", "content": "Use English",
-        "evidence": "From now on, use English"})
+        "evidence": "From now on, use English", "expected_revision": 1})
     model = ScriptedLLM([LLMReply("", Message("assistant", "", (call,)), (call,)),
                          LLMReply("done", Message("assistant", "done"))])
     monkeypatch.setattr(cli, "OpenAICompatibleModel", lambda *args, **kwargs: model)
@@ -288,7 +288,7 @@ def test_cli_agent_recall_update_and_resume(tmp_path: Path, monkeypatch: pytest.
     assert store.search(kind="semantic")[0].content == "Use English"
     assert store.search(kind="semantic")[0].load_policy == "always"
     payload = json.loads((state / "history" / "sessions" / "demo.json").read_text(encoding="utf-8"))
-    assert payload["version"] == 3 and payload["memory"]["version"] == 1
+    assert payload["version"] == 3 and payload["memory"]["version"] == 2
     assert "Historical project memory" not in str(payload["history"])
     model = ScriptedLLM([LLMReply("continued", Message("assistant", "continued"))])
     inputs = iter(["Continue", "exit"])

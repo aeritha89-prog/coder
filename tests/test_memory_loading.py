@@ -50,7 +50,7 @@ def test_existing_database_migrates_without_promoting_or_rewriting_content(tmp_p
                and entry.created_at == 1.0 and entry.updated_at == 2.0 for entry in entries)
     assert store.load_always() == ([], 0)
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_future_schema_is_rejected_without_modification(tmp_path: Path) -> None:
