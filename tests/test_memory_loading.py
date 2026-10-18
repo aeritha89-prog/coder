@@ -1,8 +1,7 @@
-"""开放式常驻记忆：旧库迁移、真实用户来源、独立加载和上下文降级。"""
+"""开放式常驻记忆：当前格式、真实用户来源、独立加载和上下文降级。"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -28,29 +27,32 @@ def store_at(root: Path) -> MemoryStore:
     return MemoryStore(root / "state", project)
 
 
-def test_existing_database_migrates_without_promoting_or_rewriting_content(tmp_path: Path) -> None:
+def test_current_database_can_be_created_concurrently(tmp_path: Path) -> None:
     store = store_at(tmp_path)
-    store.path.parent.mkdir(parents=True)
-    with sqlite3.connect(store.path) as connection:
-        connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
-        connection.execute("INSERT INTO metadata VALUES ('workspace', ?)", (store.workspace,))
-        connection.execute("""CREATE TABLE memories (
-            id TEXT PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL,
-            content TEXT NOT NULL, tags TEXT NOT NULL, source TEXT NOT NULL,
-            created_at REAL NOT NULL, updated_at REAL NOT NULL, digest TEXT NOT NULL,
-            UNIQUE(kind,key))""")
-        connection.execute("INSERT INTO memories VALUES (?,?,?,?,?,?,?,?,?)",
-                           ("mem_" + "a" * 16, "semantic", "old-preference", "Use Chinese",
-                            '["language"]', "old agent note", 1.0, 2.0,
-                            hashlib.sha256(b"use chinese").hexdigest()))
     with ThreadPoolExecutor(max_workers=4) as pool:
-        entries = list(pool.map(lambda _: store.search()[0], range(4)))
-    assert all(entry.id == "mem_" + "a" * 16 and entry.content == "Use Chinese"
-               and entry.load_policy == "on_demand" and entry.priority == 50
-               and entry.created_at == 1.0 and entry.updated_at == 2.0 for entry in entries)
+        entries = list(pool.map(lambda index: store.remember("semantic", f"note-{index}", f"fact {index}"), range(4)))
+    assert len(store.search()) == 4 and len({entry.id for entry in entries}) == 4
+    assert all(entry.load_policy == "on_demand" and entry.priority == 50
+               and entry.source_kind == "user_action" and entry.status == "active"
+               and entry.scope_id == store.workspace for entry in entries)
     assert store.load_always() == ([], 0)
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("version", [0, 1])
+def test_old_database_is_rejected_without_migration_or_modification(tmp_path: Path, version: int) -> None:
+    store = store_at(tmp_path)
+    saved = store.remember("semantic", "existing", "Preserve this data")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(f"PRAGMA user_version={version}")
+    original = store.path.read_bytes()
+    for operation in (store.search, lambda: store.remember("semantic", "new", "Do not write"),
+                      lambda: store.forget(saved.id)):
+        with pytest.raises(ValueError, match="unsupported memory database schema"):
+            operation()
+        assert store.path.read_bytes() == original
+    assert not list(store.path.parent.glob("*.backup.sqlite3"))
 
 
 def test_future_schema_is_rejected_without_modification(tmp_path: Path) -> None:
@@ -65,7 +67,7 @@ def test_future_schema_is_rejected_without_modification(tmp_path: Path) -> None:
         assert connection.execute("SELECT content FROM memories").fetchone()[0] == "Keep this"
 
 
-def test_migrated_reads_work_while_another_connection_has_a_write_transaction(tmp_path: Path) -> None:
+def test_current_reads_work_while_another_connection_has_a_write_transaction(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     store.remember("semantic", "existing", "Committed content")
     writer = sqlite3.connect(store.path)

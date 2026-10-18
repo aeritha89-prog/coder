@@ -62,29 +62,18 @@ def load_session_bundle(root: Path, name: str, settings: Settings
                         ) -> tuple[list[Message], dict[str, str], Any]:
     """读取完整会话及短期层；没有缓存的会话仍可从完整历史重新摘要。"""
     payload: dict[str, Any] = json.loads(session_path(root, name).read_text(encoding="utf-8"))
-    if payload.get("version") not in (1, 2, 3) or payload.get("workspace") != str(settings.workspace):
+    if not isinstance(payload, dict) or payload.get("version") != 3 or payload.get("workspace") != str(settings.workspace):
         raise ValueError("session version or workspace does not match")
+    if not {"history", "active_skills", "memory"} <= payload.keys():
+        raise ValueError("current session requires history, active_skills and memory fields")
     messages: list[Message] = []
     for raw in payload["history"]:
-        calls = tuple(ToolCall(**item) for item in raw.get("tool_calls", []))
-        messages.append(Message(raw["role"], raw.get("content", ""), calls,
-                                raw.get("call_id")))
-    skills = payload.get("active_skills", {})
+        calls = tuple(ToolCall(**item) for item in raw["tool_calls"])
+        messages.append(Message(raw["role"], raw["content"], calls, raw["call_id"]))
+    skills = payload["active_skills"]
     if not isinstance(skills, dict) or any(
         not isinstance(name, str) or not isinstance(digest, str)
         or not re.fullmatch(r"[0-9a-f]{64}", digest) for name, digest in skills.items()
     ):
         raise ValueError("invalid session active_skills")
-    return messages, skills, payload.get("memory")
-
-
-def load_session_state(root: Path, name: str, settings: Settings
-                       ) -> tuple[list[Message], dict[str, str]]:
-    """保留只需要消息和活动技能的读取接口。"""
-    history, skills, _ = load_session_bundle(root, name, settings)
-    return history, skills
-
-
-def load_session(root: Path, name: str, settings: Settings) -> list[Message]:
-    """兼容原有消息读取 API；Agent 续接应使用 load_session_state。"""
-    return load_session_state(root, name, settings)[0]
+    return messages, skills, payload["memory"]

@@ -9,7 +9,7 @@ from study_coder.config import Settings
 from study_coder.context import ContextError, ContextManager, ContextSummary, ModelSummarizer
 from study_coder.llm import ScriptedLLM
 from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.session import load_session, save_session
+from study_coder.session import load_session_bundle, save_session
 from study_coder.tools.base import ToolContext, ToolRegistry
 from study_coder.tools.read import ReadFileTool
 from study_coder.types import LLMReply, Message, ToolCall, ToolResult, Usage
@@ -205,7 +205,7 @@ def test_agent_and_session_retain_full_history_after_model_view_is_snipped(works
     assert len(durable_tool.content) > 8_000
     assert "[snipped" in model_tool.content
     save_session(workspace, "full_history", settings, agent.history)
-    assert next(item for item in load_session(workspace, "full_history", settings)
+    assert next(item for item in load_session_bundle(workspace, "full_history", settings)[0]
                 if item.role == "tool").content == durable_tool.content
 
 

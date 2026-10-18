@@ -58,7 +58,7 @@ class MemoryProjection:
         for item in values[:100]:
             if not isinstance(item, dict):
                 continue
-            reference = {"id": item.get("id"), "revision": item.get("revision", 1),
+            reference = {"id": item.get("id"), "revision": item.get("revision"),
                          "binding": "historical" if item.get("kind") not in {"semantic", "procedural"}
                          or call.arguments.get("revision") is not None else "current"}
             if valid_reference(reference):

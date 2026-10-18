@@ -12,7 +12,7 @@ from study_coder.config import Settings, load_settings
 from study_coder.context import ContextError, ContextManager
 from study_coder.llm import ScriptedLLM
 from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.session import load_session_state, save_session
+from study_coder.session import load_session_bundle, save_session
 from study_coder.tools import default_tools
 from study_coder.tools.base import ToolFailure
 from study_coder.tools.skillload import skill_loader
@@ -143,7 +143,7 @@ def test_session_roundtrip_restores_only_current_trusted_body(tmp_path: Path) ->
     agent.run("load")
     path = save_session(tmp_path, "test", agent.settings, agent.history, agent.skill_state())
     assert "FULL SKILL INSTRUCTIONS" not in path.read_text(encoding="utf-8")
-    history, skills = load_session_state(tmp_path, "test", agent.settings)
+    history, skills, _ = load_session_bundle(tmp_path, "test", agent.settings)
     restored, model, _ = make_agent(tmp_path, [done()])
     restored.restore_session(history, skills)
     assert restored.history == history and restored.history is not history

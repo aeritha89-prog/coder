@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ import study_coder.cli as cli
 from study_coder.cli import main
 from study_coder.config import Settings, load_settings
 from study_coder.llm import ScriptedLLM
-from study_coder.session import load_session, save_session, session_path
+from study_coder.session import load_session_bundle, save_session, session_path
 from study_coder.types import LLMReply, Message, ToolCall, ToolResult
 
 
@@ -117,7 +118,30 @@ def test_session_name_and_roundtrip(workspace: Path) -> None:
         session_path(workspace, "../escape")
     original = [Message("system", "policy"), Message("user", "hello")]
     save_session(workspace, "run_1", settings, original)
-    assert load_session(workspace, "run_1", settings) == original
+    assert load_session_bundle(workspace, "run_1", settings) == (original, {}, None)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_old_session_versions_are_rejected_without_rewriting(workspace: Path, version: int) -> None:
+    settings = Settings("scripted", None, None, workspace)
+    path = save_session(workspace, "old_session", settings, [Message("user", "retain this history")])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["version"] = version
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="session version"):
+        load_session_bundle(workspace, "old_session", settings)
+    assert path.read_bytes() == original
+
+
+def test_current_session_does_not_fill_missing_memory_fields(workspace: Path) -> None:
+    settings = Settings("scripted", None, None, workspace)
+    path = save_session(workspace, "incomplete", settings, [Message("user", "history")])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("memory")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="requires history, active_skills and memory"):
+        load_session_bundle(workspace, "incomplete", settings)
 
 
 def test_dotenv_settings_and_shell_priority(workspace: Path, tmp_path: Path) -> None:

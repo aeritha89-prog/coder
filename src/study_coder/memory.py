@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from study_coder.memory_budget import core_tokens, core_value, effective_budget, memory_message
-from study_coder.memory_schema import MAX_TOMBSTONES, fingerprint, identity, migrate, record_change
+from study_coder.memory_schema import (
+    MAX_TOMBSTONES,
+    fingerprint,
+    identity,
+    initialize_schema,
+    record_change,
+)
 from study_coder.memory_view import MemoryProjection
 from study_coder.types import Message, ToolResult
 
@@ -87,7 +93,7 @@ class MemoryEntry:
     priority: int = 50
     status: str = "active"
     revision: int = 1
-    source_kind: str = "legacy"
+    source_kind: str = "user_action"
     source_refs: list[dict[str, str]] = field(default_factory=list)
     recall_text: str = ""
     scope_type: str = "workspace"
@@ -110,7 +116,7 @@ class MemoryContext:
 
 
 def _redacted_entry(entry: MemoryEntry) -> MemoryEntry:
-    """旧库只在返回副本中脱敏；保留 ID 供用户删除，不回写或改动历史归档。"""
+    """读取副本始终脱敏；保留 ID 供用户删除，不回写或改动历史归档。"""
     return replace(entry, key=_redact_credentials(entry.key),
                    content=_redact_credentials(entry.content),
                    tags=[_redact_credentials(tag) for tag in entry.tags],
@@ -171,9 +177,10 @@ class MemoryStore:
         connection = sqlite3.connect(self.path, timeout=10)
         try:
             connection.row_factory = sqlite3.Row
-            migrate(connection, self.path, self.workspace)
-            # 已迁移的库走只读校验，不在每次查询时重复 DDL 或发起写事务。
-            if connection.execute("SELECT value FROM metadata WHERE key='workspace'").fetchone()[0] != self.workspace:
+            initialize_schema(connection, self.workspace)
+            # 已建库只校验归属，不在每次查询时重复 DDL 或发起写事务。
+            owner = connection.execute("SELECT value FROM metadata WHERE key='workspace'").fetchone()
+            if owner is None or owner[0] != self.workspace:
                 raise ValueError("memory workspace does not match")
             return connection
         except Exception:
@@ -379,7 +386,7 @@ class MemoryStore:
                 continue
             ranked.append((score, entry.updated_at, entry))
         ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        # 排序后再处理少量返回条目，既保护旧库的读取出口，也不重复扫描整库。
+        # 排序后再处理少量返回条目，保护读取出口且不重复扫描整库。
         return [_redacted_entry(entry) for _, _, entry in ranked[:limit]]
 
     def load_always(self, limit: int = 8) -> tuple[list[MemoryEntry], int]:
@@ -559,7 +566,7 @@ class MemoryManager:
         for entry in entries:
             # 常驻视图只携带可回查 ID、稳定键和正文，给自由表达的偏好留出空间。
             # 完整来源、类别等仍保存在库中，可用 memory_search 回查。
-            value: dict[str, Any] = core_value(entry.id, entry.key, entry.recall_text or entry.content)
+            value: dict[str, Any] = core_value(entry.id, entry.key, entry.recall_text)
             if not core:
                 value.update(kind=entry.kind, tags=entry.tags, source=entry.source,
                              updated_at=entry.updated_at)
@@ -693,10 +700,10 @@ class MemoryManager:
                 elif name == "memory_remember":
                     # 最小预算也保留真实加载方式；详细元数据可以按 ID 回查。
                     compact = {key: values[key] for key in
-                               ("id", "saved", "load_policy", "activated_as_always", "reason")
+                               ("id", "revision", "saved", "load_policy", "activated_as_always", "reason")
                                if key in values}
-                    # 最小预算优先报告实际策略；较大预算另带版本和候选状态。
-                    detail = {**compact, "revision": values["revision"], "status": values["status"]}
+                    # 版本和实际策略始终保留；预算允许时再带候选状态。
+                    detail = {**compact, "status": values["status"]}
                     if len(json.dumps(detail, separators=(",", ":"))) <= maximum:
                         compact = detail
                     encoded = json.dumps(compact, ensure_ascii=False, separators=(",", ":"))

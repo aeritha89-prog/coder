@@ -174,7 +174,7 @@ class ContextManager:
         if state is None:
             return
         try:
-            if not isinstance(state, dict) or state.get("version") not in (1, 2):
+            if not isinstance(state, dict) or state.get("version") != 2:
                 raise ValueError("invalid memory version")
             short = state["short_term"]
             summary, keys = short["summary"], short["covered_keys"]
@@ -188,7 +188,7 @@ class ContextManager:
             if self._group_keys(groups[:len(keys)]) != tuple(keys):
                 raise ValueError("short-term memory differs from history")
             self._summary_text, self._summary_keys = summary, tuple(keys)
-            refs = short.get("references", [])
+            refs = short["references"]
             if not isinstance(refs, list) or len(refs) > MAX_REFERENCES or not all(valid_reference(ref) for ref in refs):
                 raise ValueError("invalid memory references")
             self._summary_refs = refs

@@ -1,4 +1,4 @@
-"""第一阶段生命周期：真实 SQLite 迁移/并发，以及原始历史不变的模型视图。"""
+"""当前记忆生命周期：事务建库/并发，以及原始历史不变的模型视图。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from study_coder.cli import main
 from study_coder.config import Settings
 from study_coder.context import ContextManager, ContextSummary
 from study_coder.memory import MemoryManager, MemoryStore
-from study_coder.memory_schema import fingerprint, migrate
+from study_coder.memory_schema import fingerprint, initialize_schema, record_change
 from study_coder.types import Message, ToolCall, ToolResult
 
 
@@ -24,37 +24,33 @@ def setup(root: Path, maximum: int = 1000) -> tuple[MemoryStore, MemoryManager]:
     return store, MemoryManager(store, auto_episode=False)
 
 
-def legacy_store(store: MemoryStore, kinds: list[str]) -> None:
-    store.path.parent.mkdir(parents=True)
-    with sqlite3.connect(store.path) as connection:
-        connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
-        connection.execute("INSERT INTO metadata VALUES('workspace',?)", (store.workspace,))
-        connection.execute("""CREATE TABLE memories (
-            id TEXT PRIMARY KEY, kind TEXT, key TEXT, content TEXT, tags TEXT, source TEXT,
-            created_at REAL, updated_at REAL, digest TEXT, load_policy TEXT, priority INTEGER,
-            UNIQUE(kind,key))""")
-        connection.executemany("INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?,?,?)", [
-            (f"mem_{i:016x}", kind, f"legacy-{i}", f"legacy fact {i}", '[]', "legacy note",
-             1.0, 2.0, hashlib.sha256(str(i).encode()).hexdigest(), "on_demand", 50)
-            for i, kind in enumerate(kinds)])
-        connection.execute("PRAGMA user_version=1")
+def fill_current_store(store: MemoryStore, kinds: list[str]) -> None:
+    """用一个事务准备满容量当前库，保留真实版本和来源记录。"""
+    connection = store._connect()
+    try:
+        with connection:
+            for index, kind in enumerate(kinds):
+                identifier, content = f"mem_{index:016x}", f"current fact {index}"
+                connection.execute("""INSERT INTO memories
+                    (id,kind,key,content,tags,source,created_at,updated_at,digest,recall_text,scope_id,content_fingerprint)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (identifier, kind, f"fact-{index}", content, '[]', "user action", 1.0, 2.0,
+                     hashlib.sha256(content.encode()).hexdigest(), content, store.workspace, fingerprint(kind, content)))
+                record_change(connection, identifier, "remember")
+    finally:
+        connection.close()
 
 
 @pytest.mark.parametrize("kinds", [["episodic"] * 1000, ["semantic"] * 1000,
                                   ["semantic", "procedural", "episodic"] * 333 + ["procedural"]])
-def test_full_legacy_database_is_backed_up_and_versions_do_not_consume_quota(tmp_path: Path, kinds: list[str]) -> None:
+def test_full_current_database_versions_do_not_consume_quota(tmp_path: Path, kinds: list[str]) -> None:
     store, _ = setup(tmp_path)
-    legacy_store(store, kinds)
+    fill_current_store(store, kinds)
     first = store.search(limit=100)[0]
-    assert first.status == "active" and first.source_kind == "legacy"
+    assert first.status == "active" and first.source_kind == "user_action"
     assert first.verification_status == "unknown" and first.verified_at is None
     assert (first.created_at, first.updated_at) == (1.0, 2.0)
     assert first.recall_text == first.content and first.content_fingerprint
-    backup = store.path.with_name("memory.schema-1.backup.sqlite3")
-    with sqlite3.connect(backup) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 1000
-        assert "status" not in {row[1] for row in connection.execute("PRAGMA table_info(memories)")}
     updated = store.remember(first.kind, first.key, "explicit replacement", expected_revision=1)
     assert updated.id == first.id and updated.revision == 2 and updated.supersedes_revision == 1
     assert store.get(first.id, 1).status == "superseded"
@@ -65,24 +61,23 @@ def test_full_legacy_database_is_backed_up_and_versions_do_not_consume_quota(tmp
         assert {"memories_loading", "memories_digest", "memories_state"} <= indices
 
 
-def test_interrupted_migration_rolls_back_and_can_retry(tmp_path: Path) -> None:
+def test_interrupted_initialization_rolls_back_and_can_retry(tmp_path: Path) -> None:
     store, _ = setup(tmp_path)
-    legacy_store(store, ["semantic"])
+    store.path.parent.mkdir(parents=True)
     connection = sqlite3.connect(store.path)
     connection.row_factory = sqlite3.Row
-    # 在列回填之后拒绝索引 DDL，验证新增列和数据都会回滚。
+    # 在建表之后拒绝索引 DDL，验证初始 schema 不会留下半份状态。
     connection.set_authorizer(lambda action, *args: sqlite3.SQLITE_DENY
                               if action == sqlite3.SQLITE_CREATE_INDEX else sqlite3.SQLITE_OK)
     try:
         with pytest.raises(sqlite3.DatabaseError):
-            migrate(connection, store.path, store.workspace)
+            initialize_schema(connection, store.workspace)
     finally:
         connection.close()
     with sqlite3.connect(store.path) as check:
-        assert check.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert "status" not in {row[1] for row in check.execute("PRAGMA table_info(memories)")}
-    assert store.search()[0].status == "active"
-    assert store.path.with_name("memory.schema-1.backup.sqlite3").exists()
+        assert check.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert check.execute("SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchone()[0] == 0
+    assert store.remember("semantic", "retry", "Initialization retry succeeded").status == "active"
 
 
 def test_only_one_concurrent_expected_revision_update_can_commit(tmp_path: Path) -> None:
@@ -302,6 +297,31 @@ def test_reference_expansion_is_budgeted_and_missing_db_fails_closed(tmp_path: P
     group = tool_group("memory_read", {"id": entry.id}, {"memory": asdict(entry)})
     view = manager.projection.project_messages(group)
     assert "unavailable" in repr(view) and "中" not in repr(view)
+
+
+@pytest.mark.parametrize("version,include_refs", [(1, True), (2, False)])
+def test_old_or_incomplete_summary_state_is_not_restored(tmp_path: Path, version: int, include_refs: bool) -> None:
+    context = ContextManager(Settings("test", None, None, tmp_path))
+    history = [Message("system", "policy"), Message("user", "old request"),
+               Message("assistant", "old reply"), Message("user", "new request")]
+    short = {"summary": "old cached summary", "covered_keys": list(context._group_keys([(history[1],), (history[2],)]))}
+    if include_refs:
+        short["references"] = []
+    context.restore_memory({"version": version, "short_term": short}, history)
+    assert context.short_term_memory.summary == ""
+    assert context.build_view(history) == history
+
+
+def test_old_memory_tool_result_without_revision_is_not_guessed(tmp_path: Path) -> None:
+    store, manager = setup(tmp_path)
+    entry = store.remember("semantic", "language", "Chinese")
+    fields = asdict(entry)
+    fields.pop("revision")
+    group = tool_group("memory_remember", {"content": "Chinese"}, fields)
+    assert manager.projection.references_from(group) == []
+    assert "Chinese" not in repr(manager.projection.project_messages(group))
+    compact = manager.execute("memory_remember", {"kind": "semantic", "key": "candidate", "content": "new inference"}, 160)
+    assert not compact.is_error and json.loads(compact.content)["revision"] == 1
 
 
 def test_cli_status_and_historical_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
