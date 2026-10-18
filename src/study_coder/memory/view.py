@@ -22,7 +22,6 @@ _SAFE_ERRORS = (
     "Error: updating memory requires expected_revision; read its current version first",
     "Error: memory revision conflict; read the current version before updating",
     "Error: inferred candidates cannot replace active memory; current user evidence is required",
-    "Error: memory was withdrawn; new explicit user evidence is required",
     "Error: changing always memory requires evidence quoted from the current user's request",
     "Error: evidence must quote the current user's request",
     "Error: core budget exceeded; existing always memory was not changed",

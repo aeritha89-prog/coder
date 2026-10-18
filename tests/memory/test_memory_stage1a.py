@@ -59,6 +59,8 @@ def test_cli_uses_same_budget_as_model_tools(tmp_path: Path, monkeypatch: pytest
                                           capsys: pytest.CaptureFixture) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("STUDY_CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS", "256")
+    monkeypatch.setenv("STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS", "1200")
     assert main(["memory", "remember", "-C", str(tmp_path), "--kind", "semantic", "--key", "long",
                  "--content", "中" * 300, "--load-policy", "always"]) == 0
     result = json.loads(capsys.readouterr().out)

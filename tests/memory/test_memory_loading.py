@@ -37,7 +37,9 @@ def test_current_database_can_be_created_concurrently(tmp_path: Path) -> None:
                and entry.scope_id == store.workspace for entry in entries)
     assert store.load_always() == ([], 0)
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert tables == {"metadata", "memories", "memory_versions", "memory_events"}
 
 
 @pytest.mark.parametrize("version", [0, 1])

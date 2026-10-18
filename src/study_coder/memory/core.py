@@ -16,9 +16,7 @@ from typing import Any
 
 from study_coder.memory.budget import core_tokens, core_value, effective_budget, memory_message
 from study_coder.memory.schema import (
-    MAX_TOMBSTONES,
     fingerprint,
-    identity,
     initialize_schema,
     record_change,
 )
@@ -156,11 +154,6 @@ def _fingerprint(kind: str, content: str) -> str:
     return fingerprint(kind, content)
 
 
-def _identity(workspace: str, kind: str, category: str, value: str) -> str:
-    """撤销标记不保存正文，且不能跨工作区、跨类别误命中。"""
-    return identity(workspace, kind, category, value)
-
-
 class MemoryStore:
     """每个真实工作区一份 SQLite；事务处理并发写入，不修改项目工作文件。"""
 
@@ -178,7 +171,7 @@ class MemoryStore:
         try:
             connection.row_factory = sqlite3.Row
             initialize_schema(connection, self.workspace)
-            # 已建库只校验归属，不在每次查询时重复 DDL 或发起写事务。
+            # 初始化或升级后校验归属；当前格式库不在每次查询时重复 DDL 或写事务。
             owner = connection.execute("SELECT value FROM metadata WHERE key='workspace'").fetchone()
             if owner is None or owner[0] != self.workspace:
                 raise ValueError("memory workspace does not match")
@@ -227,8 +220,7 @@ class MemoryStore:
                  core_budget: int | None = None, recall_text: str | None = None,
                  status: str = "active", source_kind: str = "user_action",
                  source_refs: list[dict[str, str]] | None = None,
-                 expected_revision: int | None = None, require_revision: bool = False,
-                 allow_recreate: bool = True) -> MemoryEntry:
+                 expected_revision: int | None = None, require_revision: bool = False) -> MemoryEntry:
         """同类同键更新，重复正文复用原条目；容量满时只淘汰最旧情景记录。"""
         if kind not in MEMORY_KINDS:
             raise ValueError("kind must be semantic, episodic or procedural")
@@ -269,15 +261,6 @@ class MemoryStore:
             # BEGIN IMMEDIATE 覆盖查询、容量检查和写入，避免两个进程同时占最后一格。
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
-                if not allow_recreate:
-                    # 新的真实情景事件可以再次发生；对情景只检查同源撤销。
-                    tokens = [_identity(self.workspace, kind, "event", ref["event_id"]) for ref in refs]
-                    if kind != "episodic" or not refs:
-                        tokens += [_identity(self.workspace, kind, "key", key),
-                                   _identity(self.workspace, kind, "fact", fingerprint)]
-                    if any(connection.execute("SELECT 1 FROM memory_tombstones WHERE token=?", (token,)).fetchone()
-                           for token in tokens):
-                        raise ValueError("memory was withdrawn; new explicit user evidence is required")
                 row = connection.execute("SELECT * FROM memories WHERE kind=? AND key=?",
                                          (kind, key)).fetchone()
                 if row is not None and row["status"] == "deleted":
@@ -328,7 +311,6 @@ class MemoryStore:
                             raise ValueError("long-term memory is full; forget an entry before adding another")
                         connection.execute("DELETE FROM memories WHERE id=?", (oldest[0],))
                         connection.execute("DELETE FROM memory_versions WHERE memory_id=?", (oldest[0],))
-                        connection.execute("DELETE FROM memory_origins WHERE memory_id=?", (oldest[0],))
                     connection.execute("INSERT INTO memories (id,kind,key,content,tags,source,created_at,updated_at,digest,load_policy,priority) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                                        (identifier, kind, key, content, json.dumps(tags, ensure_ascii=False),
                                         source, now, now, digest, policy, importance))
@@ -486,7 +468,7 @@ class MemoryStore:
             connection.close()
 
     def forget(self, identifier: str) -> bool:
-        """撤销可召回正文和版本，用无正文标记阻止同源重建；不改原始会话。"""
+        """清除当前条目及保留版本；旧 ID 失效，后续允许按正常流程重新保存。"""
         self._validate_id(identifier)
         if not self.path.exists():
             return False
@@ -497,26 +479,8 @@ class MemoryStore:
                 row = connection.execute("SELECT * FROM memories WHERE id=?", (identifier,)).fetchone()
                 if row is None or row["status"] == "deleted":
                     return False
-                entry = self._entry(row)
-                tokens = [_identity(self.workspace, entry.kind, "key", entry.key),
-                          _identity(self.workspace, entry.kind, "fact", _fingerprint(entry.kind, entry.content))]
-                tokens += [_identity(self.workspace, entry.kind, "event", ref["event_id"])
-                           for ref in entry.source_refs]
-                tokens += [item[0] for item in connection.execute("SELECT token FROM memory_origins WHERE memory_id=?", (identifier,))]
-                # 过去版本的来源也要撤销，避免先更新再删除绕过原事件标记。
-                versions = connection.execute("SELECT snapshot FROM memory_versions WHERE memory_id=?", (identifier,)).fetchall()
-                for version in versions:
-                    old = self._entry(json.loads(version[0]))
-                    tokens += [_identity(self.workspace, old.kind, "fact", _fingerprint(old.kind, old.content))]
-                    tokens += [_identity(self.workspace, old.kind, "event", ref["event_id"])
-                               for ref in old.source_refs]
-                connection.executemany("INSERT OR IGNORE INTO memory_tombstones VALUES (?,?,?)",
-                                       [(token, identifier, time.time()) for token in set(tokens)])
-                if connection.execute("SELECT COUNT(*) FROM memory_tombstones").fetchone()[0] > MAX_TOMBSTONES:
-                    raise ValueError("withdrawal marker capacity exceeded; no data was changed")
                 connection.execute("DELETE FROM memory_versions WHERE memory_id=?", (identifier,))
-                connection.execute("DELETE FROM memory_origins WHERE memory_id=?", (identifier,))
-                # 当前行只留身份与撤销状态；正文、来源、标签和召回表达全部清除。
+                # 保留不可读的旧 ID，释放原 key；再次保存会分配新 ID，旧引用继续失效。
                 connection.execute("UPDATE memories SET key=?,content='',recall_text='',tags='[]',source='',source_refs='[]',conditions='{}',digest='',content_fingerprint='',status='deleted',revision=revision+1 WHERE id=?",
                                    ("\0" + identifier, identifier))
                 record_change(connection, identifier, "forget")
@@ -638,7 +602,7 @@ class MemoryManager:
         self.store.remember("episodic", episode_key, content,
                             sorted({r.name for r in results if r.name not in MEMORY_TOOLS})[:8],
                             source=("tool observations:" + source)[:300],
-                            source_kind="tool_observed", source_refs=refs, allow_recreate=False)
+                            source_kind="tool_observed", source_refs=refs)
 
     def execute(self, name: str, arguments: dict[str, Any], maximum: int) -> ToolResult:
         """模型只能操作当前项目的条目，不能提交宿主路径或修改存储位置。"""
@@ -680,7 +644,7 @@ class MemoryManager:
                     recall_text=arguments.get("recall_text"),
                     expected_revision=arguments.get("expected_revision"), require_revision=True,
                     source_kind="user_statement" if verified else "model_inferred",
-                    status="active" if verified else "candidate", allow_recreate=verified,
+                    status="active" if verified else "candidate",
                     source_refs=[{"kind": "user_message", "event_id": hashlib.sha256(
                         (self.origin + "\n" + (self.user_request or "")).encode()).hexdigest()}])
             elif name == "memory_forget":

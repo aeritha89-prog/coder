@@ -80,6 +80,66 @@ def test_interrupted_initialization_rolls_back_and_can_retry(tmp_path: Path) -> 
     assert store.remember("semantic", "retry", "Initialization retry succeeded").status == "active"
 
 
+def prepare_schema2(store: MemoryStore) -> dict[str, list[tuple]]:
+    """在临时库中还原 schema 2 的两张辅助表；其余表与当前格式一致。"""
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("CREATE TABLE memory_tombstones (token TEXT PRIMARY KEY, memory_id TEXT NOT NULL, created_at REAL NOT NULL)")
+        connection.execute("CREATE TABLE memory_origins (memory_id TEXT, token TEXT, PRIMARY KEY(memory_id,token))")
+        connection.execute("INSERT INTO memory_tombstones VALUES ('old-withdrawal','old-id',1)")
+        connection.execute("INSERT INTO memory_origins VALUES ('old-id','old-source')")
+        connection.execute("PRAGMA user_version=2")
+        return {table: connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+                for table in ("metadata", "memories", "memory_versions", "memory_events")}
+
+
+def test_schema2_cleanup_is_concurrent_and_preserves_memory_and_versions(tmp_path: Path) -> None:
+    store, _ = setup(tmp_path)
+    first = store.remember("semantic", "language", "Chinese", load_policy="always", priority=80)
+    current = store.remember("semantic", "language", "English", expected_revision=first.revision)
+    before = prepare_schema2(store)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert list(pool.map(lambda _: store.get(first.id), range(4))) == [current] * 4
+    assert store.get(first.id, 1).content == first.content
+    assert store.get(first.id, 1).status == "superseded"
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert tables == set(before)
+        for table, rows in before.items():
+            assert connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() == rows
+
+
+def test_interrupted_schema2_cleanup_rolls_back_and_can_retry(tmp_path: Path) -> None:
+    store, _ = setup(tmp_path)
+    entry = store.remember("semantic", "keep", "Preserve this memory")
+    prepare_schema2(store)
+    connection = sqlite3.connect(store.path)
+    connection.set_authorizer(lambda action, table, *args: sqlite3.SQLITE_DENY
+                              if action == sqlite3.SQLITE_DROP_TABLE and table == "memory_origins"
+                              else sqlite3.SQLITE_OK)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            initialize_schema(connection, store.workspace)
+    finally:
+        connection.close()
+    with sqlite3.connect(store.path) as check:
+        assert check.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert check.execute("SELECT COUNT(*) FROM memory_tombstones").fetchone()[0] == 1
+        assert check.execute("SELECT COUNT(*) FROM memory_origins").fetchone()[0] == 1
+    assert store.get(entry.id) == entry
+
+
+def test_schema2_cleanup_checks_workspace_before_dropping_tables(tmp_path: Path) -> None:
+    store, _ = setup(tmp_path)
+    store.remember("semantic", "keep", "Preserve this memory")
+    prepare_schema2(store)
+    original = store.path.read_bytes()
+    with sqlite3.connect(store.path) as connection:
+        with pytest.raises(ValueError, match="workspace does not match"):
+            initialize_schema(connection, "another workspace")
+    assert store.path.read_bytes() == original
+
+
 def test_only_one_concurrent_expected_revision_update_can_commit(tmp_path: Path) -> None:
     store, _ = setup(tmp_path)
     entry = store.remember("semantic", "language", "Chinese")
@@ -146,7 +206,8 @@ def test_version_and_event_retention_are_bounded(tmp_path: Path, monkeypatch: py
     assert store.get(entry.id, 1) is None and store.get(entry.id, 6) is not None
 
 
-def test_forget_wipes_versions_and_blocks_old_facts_until_user_reintroduces_them(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_evidence", [False, True])
+def test_forget_wipes_versions_and_allows_new_memory_identity(tmp_path: Path, with_evidence: bool) -> None:
     store, manager = setup(tmp_path)
     first = store.remember("semantic", "language", "Chinese")
     store.remember("semantic", "language", "English")
@@ -155,16 +216,21 @@ def test_forget_wipes_versions_and_blocks_old_facts_until_user_reintroduces_them
         row = connection.execute("SELECT key,content,recall_text,source,source_refs FROM memories").fetchone()
         assert row == ("\0" + first.id, "", "", "", "[]")
         assert connection.execute("SELECT COUNT(*) FROM memory_versions").fetchone()[0] == 0
-    with pytest.raises(ValueError, match="withdrawn"):
-        store.remember("semantic", "new-key", "Chinese", allow_recreate=False)
     manager.user_request = "以后继续用中文"
-    result = manager.execute("memory_remember", {"kind": "semantic", "key": "language", "content": "Chinese",
-                                                "evidence": manager.user_request}, 5000)
-    assert not result.is_error and json.loads(result.content)["id"] != first.id
+    fields = {"kind": "semantic", "key": "language", "content": "Chinese"}
+    if with_evidence:
+        fields["evidence"] = manager.user_request
+    result = manager.execute("memory_remember", fields, 5000)
+    value = json.loads(result.content)
+    assert not result.is_error and value["id"] != first.id and value["revision"] == 1
+    assert value["status"] == ("active" if with_evidence else "candidate")
+    assert store.get(value["id"]).content == "Chinese"
     assert store.get(first.id) is None and not store.forget(first.id)
+    old_view = manager.projection.project_messages(tool_group("memory_read", {"id": first.id}, asdict(first)))
+    assert "unavailable" in repr(old_view) and "Chinese" not in repr(old_view)
 
 
-def test_same_source_episode_is_withdrawn_but_new_independent_observation_is_allowed(tmp_path: Path) -> None:
+def test_deleted_episode_can_be_saved_again_from_same_or_new_observation(tmp_path: Path) -> None:
     store, manager = setup(tmp_path)
     manager.auto_episode = True
     source = "task=stable;history_start=1;history_end=4;"
@@ -172,39 +238,34 @@ def test_same_source_episode_is_withdrawn_but_new_independent_observation_is_all
     first = store.search()[0]
     assert first.source_kind == "tool_observed" and first.verification_status == "observed"
     assert store.forget(first.id)
-    with pytest.raises(ValueError, match="withdrawn"):
-        manager.record_episode("install", [ToolResult("call-a", "bash", "download failed", True)], "completed", source + "b" * 32)
+    manager.record_episode("install", [ToolResult("call-a", "bash", "download failed", True)], "completed", source + "b" * 32)
+    replayed = store.search()[0]
+    assert replayed.id != first.id and replayed.content_fingerprint == first.content_fingerprint
     manager.record_episode("install", [ToolResult("call-b", "bash", "download failed", True)], "completed", source + "c" * 32)
     second = store.search()[0]
-    assert second.id != first.id and second.content_fingerprint == first.content_fingerprint
+    assert second.id not in {first.id, replayed.id} and second.content_fingerprint == first.content_fingerprint
+    assert store.get(first.id) is None
     assert fingerprint("procedural", "Do NOT install") != fingerprint("procedural", "Do install")
 
 
-def test_withdrawal_covers_sources_older_than_retained_versions(tmp_path: Path) -> None:
-    store, _ = setup(tmp_path)
-    for index in range(25):
-        entry = store.remember("episodic", "event", f"observation {index}",
-                               source_refs=[{"kind": "tool_observation", "event_id": f"event-{index}"}])
-    assert store.get(entry.id, 1) is None
-    assert store.forget(entry.id)
-    with pytest.raises(ValueError, match="withdrawn"):
-        store.remember("episodic", "regenerated-key", "paraphrased old observation", allow_recreate=False,
-                       source_refs=[{"kind": "tool_observation", "event_id": "event-0"}])
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM memory_origins").fetchone()[0] == 0
-
-
-def test_marker_capacity_failure_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import study_coder.memory.core as memory_module
+def test_forget_failure_preserves_body_versions_and_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, _ = setup(tmp_path)
     entry = store.remember("semantic", "preference", "Please keep this")
     revision = store.revision()
-    monkeypatch.setattr(memory_module, "MAX_TOMBSTONES", 1)
-    with pytest.raises(ValueError, match="capacity"):
+    connect = store._connect
+    def deny_body_update() -> sqlite3.Connection:
+        connection = connect()
+        connection.set_authorizer(lambda action, table, *args: sqlite3.SQLITE_DENY
+                                  if action == sqlite3.SQLITE_UPDATE and table == "memories"
+                                  else sqlite3.SQLITE_OK)
+        return connection
+    monkeypatch.setattr(store, "_connect", deny_body_update)
+    with pytest.raises(sqlite3.DatabaseError):
         store.forget(entry.id)
     assert store.get(entry.id).content == entry.content and store.revision() == revision
+    assert store.get(entry.id, entry.revision) == entry
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM memory_tombstones").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM memory_versions").fetchone()[0] == 1
 
 
 def tool_group(name: str, fields: dict, entry: dict) -> list[Message]:
