@@ -11,9 +11,9 @@ from typing import Any, Protocol
 
 from study_coder.config import Settings
 from study_coder.llm import ChatModel
-from study_coder.memory import ShortTermMemory, WorkingMemory, memory_message
-from study_coder.memory_budget import estimate_tokens
-from study_coder.memory_view import (
+from study_coder.memory.budget import estimate_tokens
+from study_coder.memory.core import ShortTermMemory, WorkingMemory, memory_message
+from study_coder.memory.view import (
     MAX_REFERENCES,
     HistoricalMemoryObservation,
     MemoryProjection,

@@ -12,9 +12,10 @@ from typing import Any, Sequence
 
 from study_coder.agent import Agent
 from study_coder.config import load_settings
-from study_coder.context import ContextManager, ModelSummarizer
+from study_coder.conversation.context import ContextManager, ModelSummarizer
+from study_coder.conversation.session import load_session_bundle, save_session, session_path
 from study_coder.llm import OpenAICompatibleModel
-from study_coder.memory import (
+from study_coder.memory.core import (
     LOAD_POLICIES,
     MEMORY_KINDS,
     MEMORY_STATUSES,
@@ -35,7 +36,6 @@ from study_coder.sandbox.docker import (
 )
 from study_coder.sandbox.manifest import list_records, load_record
 from study_coder.sandbox.policy import load_policy
-from study_coder.session import load_session_bundle, save_session, session_path
 from study_coder.tools import default_tools
 from study_coder.types import Message
 

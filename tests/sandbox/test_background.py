@@ -14,7 +14,7 @@ import pytest
 
 from study_coder.agent import Agent
 from study_coder.config import Settings
-from study_coder.context import ContextManager
+from study_coder.conversation.context import ContextManager
 from study_coder.permissions import DefaultPermissionPolicy
 from study_coder.sandbox.background import BackgroundManager, result_json, safe_display
 from study_coder.sandbox.background_runner import (

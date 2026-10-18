@@ -8,8 +8,8 @@ import pytest
 import study_coder.cli as cli
 from study_coder.cli import main
 from study_coder.config import Settings, load_settings
+from study_coder.conversation.session import load_session_bundle, save_session, session_path
 from study_coder.llm import ScriptedLLM
-from study_coder.session import load_session_bundle, save_session, session_path
 from study_coder.types import LLMReply, Message, ToolCall, ToolResult
 
 

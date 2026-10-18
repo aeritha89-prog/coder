@@ -31,12 +31,39 @@ Agent 根据工具结果继续读取、修改或验证代码，直到完成任�
 
 ### 模块划分
 
+```text
+src/study_coder/
+├── cli.py、config.py             命令行与配置
+├── agent.py、llm.py、prompt.py   Agent 循环与模型接口
+├── conversation/                上下文与会话
+│   ├── context.py
+│   └── session.py
+├── memory/                      记忆相关实现
+│   ├── core.py                  数据结构、存储与管理
+│   ├── budget.py                预算计算
+│   ├── schema.py                数据库结构与版本记录
+│   └── view.py                  记忆引用与消息投影
+├── sandbox/                     Docker 运行、网络与文件传输
+└── tools/                       工具定义与参数校验
+
+tests/
+├── app/                         Agent、CLI、模型与权限测试
+├── conversation/                上下文测试
+├── memory/                      记忆测试
+├── sandbox/                     无需 Docker 的沙箱边界测试
+├── tools/                       工具测试
+├── integration/                 真实 Docker 集成测试
+└── fixtures/                    测试样例
+```
+
+`sandbox/images/` 保存镜像构建文件，`skills/` 保存技能，`examples/` 保存示例，`docs/` 保存设计文档。pytest、Ruff 和 mypy 缓存统一写入 `.cache/`，测试临时工作区使用系统临时目录。
+
 | 模块 | 职责 |
 | --- | --- |
 | `cli.py`、`config.py` | 命令行入口、配置读取、交互和结果展示 |
 | `agent.py`、`llm.py` | 模型调用、工具循环、完成条件、流式输出 |
-| `context.py`、`session.py` | 请求上下文裁剪、增量摘要、会话存储与恢复 |
-| `memory.py`、`memory_schema.py`、`memory_view.py`、`memory_budget.py` | 长期记忆、事务建库、引用解析与统一预算 |
+| `conversation/context.py`、`conversation/session.py` | 请求上下文裁剪、增量摘要、会话存储与恢复 |
+| `memory/core.py`、`memory/schema.py`、`memory/view.py`、`memory/budget.py` | 长期记忆、事务建库、引用解析与统一预算 |
 | `tools/` | 工具定义、参数校验、文件操作、任务管理和技能加载 |
 | `sandbox/docker.py`、`sandbox/policy.py` | 容器生命周期与宿主控制的资源、网络、执行策略 |
 | `sandbox/worker.py` | 容器内工具分发和执行 |

@@ -747,11 +747,11 @@ Agent 保留三个主要接入点：请求前读取、工具调用时写入、�
 
 当前主要代码接入点：
 
-- `study_coder.memory.MemoryStore`：存储、去重、容量和当前检索实现。
-- `study_coder.memory.MemoryManager`：两路召回、装配、情景归档、工具执行。
-- `study_coder.context.ContextManager`：工作视图、增量摘要、预算和消息组校验。
+- `study_coder.memory.core.MemoryStore`：存储、去重、容量和当前检索实现。
+- `study_coder.memory.core.MemoryManager`：两路召回、装配、情景归档、工具执行。
+- `study_coder.conversation.context.ContextManager`：工作视图、增量摘要、预算和消息组校验。
 - `study_coder.agent.Agent`：用户请求边界、模型循环和归档入口。
-- `study_coder.session`：原始会话与摘要状态的保存恢复。
+- `study_coder.conversation.session`：原始会话与摘要状态的保存恢复。
 - `study_coder.tools.memory`：模型工具定义。
 - `study_coder.cli`、`study_coder.config`：用户管理入口与配置。
 
@@ -773,9 +773,9 @@ Agent 保留三个主要接入点：请求前读取、工具调用时写入、�
 
 | 批次 | 已实现内容 | 主要代码 |
 | --- | --- | --- |
-| 1a | 普通/最终摘要统一为 user 级历史资料；模型与 CLI 共用完整消息预算；新增超预算降为按需、既有常驻更新超预算保留旧值；如实返回保存和删除结果 | `context.py`、`memory_budget.py`、`memory.py`、`cli.py` |
-| 1b | schema 2 的一致性备份与事务迁移；来源、状态、版本、替代版本与作用域预留字段；候选/归档管理；完整读取与简短召回文本；版本冲突检查和库修订号 | `memory_schema.py`、`memory.py`、`tools/memory.py`、`cli.py` |
-| 1b | 摘要结构化引用及装配期解析；撤销正文和保留版本；不含正文的来源身份、事实指纹与撤销标记；原始历史不变的工具参数和结果投影 | `memory_view.py`、`context.py`、`agent.py` |
+| 1a | 普通/最终摘要统一为 user 级历史资料；模型与 CLI 共用完整消息预算；新增超预算降为按需、既有常驻更新超预算保留旧值；如实返回保存和删除结果 | `conversation/context.py`、`memory/budget.py`、`memory/core.py`、`cli.py` |
+| 1b | schema 2 的一致性备份与事务迁移；来源、状态、版本、替代版本与作用域预留字段；候选/归档管理；完整读取与简短召回文本；版本冲突检查和库修订号 | `memory/schema.py`、`memory/core.py`、`tools/memory.py`、`cli.py` |
+| 1b | 摘要结构化引用及装配期解析；撤销正文和保留版本；不含正文的来源身份、事实指纹与撤销标记；原始历史不变的工具参数和结果投影 | `memory/view.py`、`conversation/context.py`、`agent.py` |
 
 本批次在同一工作区、同一类别和同一键内保留一个当前逻辑条目，版本替换记录 `supersedes_revision`。模型更新必须提交 `expected_revision`；并发冲突明确返回重新读取要求。模型推断不得覆盖有效条目，当前偏好引用使用有效版本，历史引用按原版本读取。没有引入语义级矛盾检测或额外模型裁决。
 

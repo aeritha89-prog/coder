@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import asdict
 from typing import Any, Protocol
 
-from study_coder.memory_budget import estimate_tokens
+from study_coder.memory.budget import estimate_tokens
 from study_coder.types import Message, ToolCall
 
 MAX_REFERENCES = 16

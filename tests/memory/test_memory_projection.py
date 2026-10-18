@@ -10,10 +10,10 @@ import pytest
 
 from study_coder.agent import Agent
 from study_coder.config import Settings
-from study_coder.context import ContextManager
+from study_coder.conversation.context import ContextManager
 from study_coder.llm import ScriptedLLM, to_provider_messages
-from study_coder.memory import MEMORY_TOOLS, MemoryManager, MemoryStore
-from study_coder.memory_view import MEMORY_OBSERVATION_HEADER, HistoricalMemoryObservation
+from study_coder.memory.core import MEMORY_TOOLS, MemoryManager, MemoryStore
+from study_coder.memory.view import MEMORY_OBSERVATION_HEADER, HistoricalMemoryObservation
 from study_coder.permissions import DefaultPermissionPolicy
 from study_coder.tools import default_tools
 from study_coder.types import LLMReply, Message, ToolCall

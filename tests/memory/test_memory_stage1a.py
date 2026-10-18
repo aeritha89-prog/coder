@@ -8,9 +8,9 @@ import pytest
 
 from study_coder.cli import main
 from study_coder.config import Settings
-from study_coder.context import ContextManager
-from study_coder.memory import MemoryManager, MemoryStore
-from study_coder.memory_budget import core_tokens
+from study_coder.conversation.context import ContextManager
+from study_coder.memory.budget import core_tokens
+from study_coder.memory.core import MemoryManager, MemoryStore
 from study_coder.types import Message
 
 

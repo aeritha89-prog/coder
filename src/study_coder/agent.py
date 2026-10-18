@@ -10,9 +10,9 @@ import uuid
 from typing import Callable, Literal
 
 from study_coder.config import Settings
-from study_coder.context import ContextManager, ModelSummarizer
+from study_coder.conversation.context import ContextManager, ModelSummarizer
 from study_coder.llm import ChatModel
-from study_coder.memory import MEMORY_TOOLS, MemoryContext, MemoryManager
+from study_coder.memory.core import MEMORY_TOOLS, MemoryContext, MemoryManager
 from study_coder.permissions import Mode, PermissionPolicy, PermissionRequest
 from study_coder.prompt import SYSTEM_PROMPT
 from study_coder.sandbox.background_runner import TERMINAL

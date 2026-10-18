@@ -14,15 +14,15 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from study_coder.memory_budget import core_tokens, core_value, effective_budget, memory_message
-from study_coder.memory_schema import (
+from study_coder.memory.budget import core_tokens, core_value, effective_budget, memory_message
+from study_coder.memory.schema import (
     MAX_TOMBSTONES,
     fingerprint,
     identity,
     initialize_schema,
     record_change,
 )
-from study_coder.memory_view import MemoryProjection
+from study_coder.memory.view import MemoryProjection
 from study_coder.types import Message, ToolResult
 
 MEMORY_KINDS = ("semantic", "episodic", "procedural")

@@ -13,9 +13,9 @@ import pytest
 
 from study_coder.cli import main
 from study_coder.config import Settings
-from study_coder.context import ContextManager, ContextSummary
-from study_coder.memory import MemoryManager, MemoryStore
-from study_coder.memory_schema import fingerprint, initialize_schema, record_change
+from study_coder.conversation.context import ContextManager, ContextSummary
+from study_coder.memory.core import MemoryManager, MemoryStore
+from study_coder.memory.schema import fingerprint, initialize_schema, record_change
 from study_coder.types import Message, ToolCall, ToolResult
 
 
@@ -135,7 +135,7 @@ def test_full_content_and_short_recall_are_separate_and_budgeted(tmp_path: Path)
 
 
 def test_version_and_event_retention_are_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import study_coder.memory_schema as schema
+    import study_coder.memory.schema as schema
     monkeypatch.setattr(schema, "MAX_EVENTS", 5)
     store, _ = setup(tmp_path)
     for index in range(25):
@@ -195,7 +195,7 @@ def test_withdrawal_covers_sources_older_than_retained_versions(tmp_path: Path) 
 
 
 def test_marker_capacity_failure_is_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import study_coder.memory as memory_module
+    import study_coder.memory.core as memory_module
     store, _ = setup(tmp_path)
     entry = store.remember("semantic", "preference", "Please keep this")
     revision = store.revision()

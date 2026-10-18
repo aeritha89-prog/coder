@@ -15,11 +15,11 @@ import pytest
 from study_coder.agent import Agent
 from study_coder.cli import main
 from study_coder.config import Settings, load_settings
-from study_coder.context import ContextManager, ContextSummary
+from study_coder.conversation.context import ContextManager, ContextSummary
+from study_coder.conversation.session import load_session_bundle, save_session
 from study_coder.llm import ScriptedLLM
-from study_coder.memory import MemoryManager, MemoryStore, WorkingMemory, memory_message
+from study_coder.memory.core import MemoryManager, MemoryStore, WorkingMemory, memory_message
 from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.session import load_session_bundle, save_session
 from study_coder.tools import default_tools
 from study_coder.types import LLMReply, Message, ToolCall, ToolResult
 

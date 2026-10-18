@@ -118,7 +118,7 @@ def test_stream_terminal_marker_survives_usage_only_tail():
 
 
 def test_truncated_summary_is_not_accepted():
-    from study_coder.context import ContextError, ModelSummarizer
+    from study_coder.conversation.context import ContextError, ModelSummarizer
     from study_coder.types import LLMReply
 
     model = ScriptedLLM([LLMReply("partial", Message("assistant", "partial"), finish_reason="length")])
