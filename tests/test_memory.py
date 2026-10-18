@@ -175,7 +175,10 @@ def test_agent_memory_tools_use_host_route_and_permissions(tmp_path: Path, allow
     agent = Agent(model, default_tools(skill_catalog={}, memory_enabled=True),
                   DefaultPermissionPolicy(yes=allowed),
                   Settings("test", None, None, tmp_path), runtime, memory=memory)
-    assert agent.run("remember my preference").stop_reason == "completed"
+    outcome = agent.run("remember my preference")
+    assert outcome.stop_reason == ("completed" if allowed else "incomplete")
+    if not allowed:
+        assert outcome.incomplete_reasons == ("memory_operation_unconfirmed",)
     assert bool(store.search()) is allowed
     assert runtime.calls == []
     if allowed:

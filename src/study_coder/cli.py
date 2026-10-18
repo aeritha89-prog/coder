@@ -270,7 +270,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         outcome = agent.run(text)  # 当前用户输入的结果；交互模式返回后不关闭沙箱。
         if args.stream:
             print(flush=True)
-        if not args.stream or outcome.stop_reason not in ("completed", "incomplete"):
+        if (not args.stream or outcome.stop_reason not in ("completed", "incomplete")
+                or "memory_operation_unconfirmed" in outcome.incomplete_reasons):
             print(outcome.text, flush=True)
         # 先完成答复展示，再把本次任务的计数写到 stderr，与已有工具日志保持一致。
         print(f"[工具统计] 总调用次数={sum(outcome.tool_call_counts.values())}",
@@ -287,6 +288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "model_output_truncated": "模型答复因长度限制被截断，可继续对话",
                             "model_content_filtered": "模型答复被内容过滤中断",
                             "model_response_incomplete": "模型响应未完整结束",
+                            "memory_operation_unconfirmed": "本轮记忆操作未经工具及数据库确认",
                             "workspace_unexportable": "工作区包含无法交付的文件"}
             reasons = outcome.incomplete_reasons or ("tasks_incomplete",)
             print("[任务] " + "；".join(descriptions.get(r, r) for r in reasons)

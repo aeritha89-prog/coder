@@ -238,11 +238,14 @@ class ContextManager:
     def _split(self, history: Sequence[Message], task_state: str | None,
                active_skills: Mapping[str, str] | None = None,
                background_state: str | None = None, memory_context: str = "",
-               core_memory_context: str = ""
+               core_memory_context: str = "", memory_action_state: str = ""
                ) -> tuple[list[Message], list[tuple[Message, ...]]]:
         """分离系统前缀与可压缩正文；临时任务状态只进入模型视图。"""
         offset = 1 if history and history[0].role == "system" else 0
         prefix = [history[0]] if offset else []
+        if memory_action_state:
+            # 本轮宿主完成门槛：只含固定诊断和工具名，不持久化成未来轮次的指令。
+            prefix.append(Message("system", memory_action_state))
         if active_skills:
             # 活动技能只进入不可压缩的系统前缀，不写入普通历史或摘要输入。
             content = "Active skills:\n" + "\n\n".join(
@@ -382,6 +385,7 @@ class ContextManager:
                    background_state: str | None = None,
                    memory_context: str = "",
                    core_memory_context: str = "",
+                   memory_action_state: str = "",
                    tool_schemas: Sequence[dict[str, Any]] = ()
                    ) -> list[Message]:
         """检查已有摘要＋未摘要消息的预算，只有再次超阈值才生成新摘要。
@@ -391,7 +395,7 @@ class ContextManager:
         """
         self.last_summary_usage = None
         prefix, body = self._split(history, task_state, active_skills, background_state,
-                                   memory_context, core_memory_context)
+                                   memory_context, core_memory_context, memory_action_state)
         goal = next((m.content for m in reversed(history) if m.role == "user"), "")
 
         def working(view: list[Message]) -> list[Message]:
@@ -403,7 +407,7 @@ class ContextManager:
             # 召回是可选资料，不能挤占系统约定、技能和当前任务的必要空间。
             self._log("本轮未注入长期记忆中的按需资料：前缀达到窗口的 50%，优先保留必要上下文与常驻资料")
             prefix, body = self._split(history, task_state, active_skills, background_state,
-                                       core_memory_context=core_memory_context)
+                                       core_memory_context=core_memory_context, memory_action_state=memory_action_state)
         if self.estimate_tokens(prefix) + schema_tokens >= 0.9 * window:
             raise ContextError("system prompts, active skills and tool schemas exceed the context window")
         full = self._working_view(prefix, body)
