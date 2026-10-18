@@ -15,7 +15,7 @@ from study_coder.memory import ShortTermMemory, WorkingMemory, memory_message
 from study_coder.memory_budget import estimate_tokens
 from study_coder.memory_view import (
     MAX_REFERENCES,
-    MEMORY_OBSERVATION_HEADER,
+    HistoricalMemoryObservation,
     MemoryProjection,
     valid_reference,
 )
@@ -230,10 +230,10 @@ class ContextManager:
 
     def snip_tool_outputs(self, messages: Sequence[Message], maximum: int = 1_800) -> list[Message]:
         """裁剪工具输出和已折叠的记忆观察，保留用户问题及真实工具参数。"""
-        return [Message(message.role, _snip(message.content, maximum),
-                        message.tool_calls, message.call_id)
-                if message.role == "tool" or (message.role == "assistant"
-                    and message.content.startswith(MEMORY_OBSERVATION_HEADER)) else message for message in messages]
+        return [type(message)(message.role, _snip(message.content, maximum),
+                              message.tool_calls, message.call_id)
+                if message.role == "tool" or isinstance(message, HistoricalMemoryObservation)
+                else message for message in messages]
 
     def _split(self, history: Sequence[Message], task_state: str | None,
                active_skills: Mapping[str, str] | None = None,
@@ -304,7 +304,12 @@ class ContextManager:
                 + self._project(_flatten([group for index, group in enumerate(groups) if index in keep])))
 
     def _project(self, messages: list[Message], *, summary: bool = False) -> list[Message]:
-        return self.memory_projector.project_messages(messages, summary=summary) if self.memory_projector else messages
+        if self.memory_projector is None:
+            return messages
+        # 必须从原始消息找本轮边界，不能让投影生成的 user 资料变成“最新请求”。
+        start = next((index for index in range(len(messages) - 1, -1, -1)
+                      if messages[index].role == "user"), None)
+        return self.memory_projector.project_messages(messages, summary=summary, current_turn_start=start)
 
     def _extend_references(self, messages: list[Message], *, reset: bool = False) -> None:
         if reset:
