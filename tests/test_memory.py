@@ -170,19 +170,27 @@ def test_agent_memory_tools_use_host_route_and_permissions(tmp_path: Path, allow
     call = ToolCall("remember", "memory_remember", {
         "kind": "semantic", "key": "language", "content": "Use Chinese"})
     model = ScriptedLLM([LLMReply("", Message("assistant", "", (call,)), (call,)),
-                         LLMReply("done", Message("assistant", "done"))])
+                         LLMReply("done", Message("assistant", "done")),
+                         LLMReply("next", Message("assistant", "next"))])
     runtime = Runtime()
     agent = Agent(model, default_tools(skill_catalog={}, memory_enabled=True),
                   DefaultPermissionPolicy(yes=allowed),
                   Settings("test", None, None, tmp_path), runtime, memory=memory)
-    outcome = agent.run("remember my preference")
-    assert outcome.stop_reason == ("completed" if allowed else "incomplete")
-    if not allowed:
-        assert outcome.incomplete_reasons == ("memory_operation_unconfirmed",)
+    assert agent.run("remember my preference").stop_reason == "completed"
     assert bool(store.search()) is allowed
     assert runtime.calls == []
     if allowed:
         assert any("Use Chinese" in m.content for m in model.requests[1])
+    assert agent.run("hello").stop_reason == "completed"
+    marker = "Memory tool calls in this request: "
+    counts = [json.loads(next(m.content.split(marker, 1)[1] for m in messages
+                             if m.role == "system" and marker in m.content))
+              for messages in model.requests]
+    # 被拒绝的调用也计数，但对应失败结果仍保留；新输入的计数与历史写入无关。
+    assert counts == [{"memory_remember": 0, "memory_forget": 0},
+                      {"memory_remember": 1, "memory_forget": 0},
+                      {"memory_remember": 0, "memory_forget": 0}]
+    assert marker not in repr(agent.history)
     agent.clear()
     assert bool(store.search()) is allowed
     assert agent.context.short_term_memory.summary == ""

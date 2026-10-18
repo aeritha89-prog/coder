@@ -7,15 +7,12 @@ import re
 import sqlite3
 import sys
 import uuid
-from contextlib import nullcontext
-from dataclasses import replace
 from typing import Callable, Literal
 
 from study_coder.config import Settings
 from study_coder.context import ContextManager, ModelSummarizer
 from study_coder.llm import ChatModel
 from study_coder.memory import MEMORY_TOOLS, MemoryContext, MemoryManager
-from study_coder.memory_action import MemoryAction
 from study_coder.permissions import Mode, PermissionPolicy, PermissionRequest
 from study_coder.prompt import SYSTEM_PROMPT
 from study_coder.sandbox.background_runner import TERMINAL
@@ -262,32 +259,10 @@ class Agent:
         prompt_tokens = completion_tokens = 0
         usage_available = False
         rounds = 0  # 已进入的模型轮次；后台 wait 的内部等待不增加它。
-        memory_action = MemoryAction.from_request(user_text) if self.memory is not None else None
-        memory_tools = {"memory_read", "memory_search", memory_action.tool} if memory_action else set()
-        memory_action_state = ""
-        publish: Callable[[str], None] | None = None
-
-        def finish(text: str, extra_reasons: tuple[str, ...] = ()) -> AgentRunResult:
-            """模型正文和宿主确认共用完成判定，仍核对任务、后台和交付条件。"""
-            reasons = extra_reasons + (("tasks_incomplete",) if self.runtime.get_incomplete_tasks() else ())
-            reasons += getattr(self.runtime, "get_background_pending", lambda: ())()
-            export_issues = tuple(getattr(self.runtime, "get_export_issues", lambda: ())())
-            if export_issues:
-                reasons += ("workspace_unexportable",)
-            stop: Literal["completed", "incomplete"] = "incomplete" if reasons else "completed"
-            return AgentRunResult(text, stop, rounds, list(self.history), results,
-                                  Usage(prompt_tokens, completion_tokens) if usage_available else None,
-                                  tool_call_counts=dict(tool_call_counts), incomplete_reasons=reasons,
-                                  export_issues=export_issues)
-
         initial_background = self._background_ids()  # 中断时保留此前任务的边界快照。
         try:
             for rounds in range(1, self.settings.max_rounds + 1):
-                confirmation = (memory_action.confirmation(self.memory.store)
-                                if memory_action and self.memory is not None else None)
                 schemas = self.tools.schemas()
-                if memory_action:
-                    schemas = [item for item in schemas if item["function"]["name"] in memory_tools]
                 # 状态只进入本轮模型视图，不写入历史，不交给旧对话摘要。
                 task_state = self.runtime.get_task_state()
                 # task_state 是 .tasks 的计划摘要，background_state 是命令执行元数据；
@@ -299,12 +274,15 @@ class Agent:
                         memory_context = self.memory.build_context(user_text + "\n" + task_state, self.context)
                     except (ValueError, OSError, sqlite3.Error) as exc:
                         print(f"[记忆] 本轮跳过长期回忆：{exc}", file=sys.stderr, flush=True)
+                    # 本轮操作计数只进入模型视图，不写入历史或长期召回查询。
+                    task_state += "\nMemory tool calls in this request: " + json.dumps({
+                        name: tool_call_counts.get(name, 0)
+                        for name in ("memory_remember", "memory_forget")})
                 model_messages = self.context.build_view(
                     self.history, task_state=task_state,
                     background_state=background_state,
                     active_skills=self.active_skills, tool_schemas=schemas,
-                    memory_context=memory_context.related, core_memory_context=memory_context.core,
-                    memory_action_state=memory_action_state)
+                    memory_context=memory_context.related, core_memory_context=memory_context.core)
                 if self.context.last_summary_usage:
                     # 摘要模型也会消耗 token；仅有供应方报告时才累计。
                     summary_usage = self.context.last_summary_usage
@@ -320,17 +298,17 @@ class Agent:
                     # CLI 借此暂停流式答复期间的通知；模型结束／异常都经 finally 恢复。
                     self.model_activity(True)
                 try:
-                    options = getattr(self.model, "response_options", None)
-                    response_scope = (options(require_tool=not bool(confirmation), defer_text=True)
-                                      if memory_action and options is not None else nullcontext(None))
-                    with response_scope as publish:
-                        reply = self.model.complete(model_messages, schemas)
+                    reply = self.model.complete(model_messages, schemas)
                 finally:
                     if self.model_activity is not None:
                         self.model_activity(False)
                 if reply.assistant_message.role != "assistant" or tuple(reply.tool_calls) != reply.assistant_message.tool_calls:
                     # 阻止工具调用列表与历史中实际记录的 assistant 消息分叉。
                     raise ValueError("model reply and assistant message disagree")
+                # 不把截断响应中的调用写入历史或执行；即使自定义模型绕过适配器，
+                # 这里仍保证后续对话里没有悬空的工具调用。
+                self.history.append(Message("assistant", reply.text)
+                                    if reply.interrupted else reply.assistant_message)
                 if reply.usage:
                     usage_available = True
                     self.usage_available = True
@@ -340,32 +318,6 @@ class Agent:
                         self.total_usage.prompt_tokens + reply.usage.prompt_tokens,
                         self.total_usage.completion_tokens + reply.usage.completion_tokens,
                     )
-                if memory_action and reply.interrupted:
-                    # 流式草稿尚未展示，截断时也不能把其中的“已保存”当作回执。
-                    text = confirmation or memory_action.failure()
-                    reply = replace(reply, text=text, assistant_message=Message("assistant", text))
-                    if publish is not None:
-                        publish(text)
-                if memory_action and not reply.tool_calls and not reply.interrupted:
-                    # 本轮完成不能由模型文字自证。重读数据库，回执还必须来自本轮
-                    # 真正执行的修改工具；召回、查询和历史里的 saved=true 都不算。
-                    confirmation = memory_action.confirmation(self.memory.store) if self.memory else None
-                    if confirmation:
-                        reply = replace(reply, text=confirmation, assistant_message=Message("assistant", confirmation))
-                        if publish is not None:
-                            publish(confirmation)
-                    elif memory_action.can_retry and rounds < min(6, self.settings.max_rounds):
-                        memory_action_state = memory_action.correction()
-                        print(f"[记忆核验] 本轮操作尚未确认，要求模型调用工具（{memory_action.retries}/2）",
-                              file=sys.stderr, flush=True)
-                        # 被拒绝的草稿不加入可复用会话，避免虚构 ID 在下一轮继续传播。
-                        continue
-                    else:
-                        break
-                # 不把截断响应中的调用写入历史或执行；即使自定义模型绕过适配器，
-                # 这里仍保证后续对话里没有悬空的工具调用。
-                self.history.append(Message("assistant", reply.text)
-                                    if reply.interrupted else reply.assistant_message)
                 if reply.interrupted:
                     reason = {"length": "model_output_truncated",
                               "content_filter": "model_content_filtered"}.get(
@@ -377,7 +329,22 @@ class Agent:
                                           incomplete_reasons=(reason,))
                 if not reply.tool_calls:
                     if reply.text.strip():
-                        return finish(reply.text)
+                        incomplete_task = self.runtime.get_incomplete_tasks()
+                        # reasons 汇总计划未完成和后台未完成原因；没有额外模型重试。
+                        # reply.text 可以已显示给用户，但宿主仍须如实判定本轮完成状态。
+                        reasons: tuple[str, ...] = (("tasks_incomplete",) if incomplete_task else ())
+                        reasons += getattr(self.runtime, "get_background_pending", lambda: ())()
+                        # 模型文字结束只说明生成结束；文件也必须符合当前导出规则。
+                        export_issues = tuple(getattr(self.runtime, "get_export_issues", lambda: ())())
+                        if export_issues:
+                            reasons += ("workspace_unexportable",)
+                        stop_reason: Literal["completed", "incomplete"] = "incomplete" if reasons else "completed"
+                        return AgentRunResult(reply.text, stop_reason, rounds, list(self.history),
+                                              results, Usage(prompt_tokens, completion_tokens)
+                                              if usage_available else None,
+                                              tool_call_counts=dict(tool_call_counts),
+                                              incomplete_reasons=reasons,
+                                              export_issues=export_issues)
                     # 空文本也没有工具调用时，给模型一次明确的继续指令。
                     self.history.append(Message("system", "The previous assistant response was "
                                                 "empty. Return a final answer or request a tool."))
@@ -387,9 +354,7 @@ class Agent:
                     tool_call_counts[call.name] = tool_call_counts.get(call.name, 0) + 1
                     self._log_tool_call(call)
                     try:
-                        result = (ToolResult(call.id, call.name,
-                                  "Error: tool is not available for this memory management request", True)
-                                  if memory_action and call.name not in memory_tools else self._execute_call(call))
+                        result = self._execute_call(call)
                     except KeyboardInterrupt:
                         # 中断时为当前与尚未执行的调用补齐结果，避免留下孤立请求。
                         result = ToolResult(call.id, call.name, "Interrupted before tool completed", True)
@@ -408,23 +373,8 @@ class Agent:
                                               if usage_available else None,
                                               tool_call_counts=dict(tool_call_counts))
                     self._record_tool_result(result, results)
-                    if memory_action is not None:
-                        memory_action.observe(call, result)
                 # 只在整组结果补齐后落盘，避免恢复到半个工具调用组。
                 self._commit_results(results)
-                if memory_action and memory_action.denied:
-                    break  # 用户/运行模式已拒绝操作，不能再次要求模型重试授权。
-                if memory_action and rounds >= 6:
-                    # 记忆管理单独限次；查询空转或反复写入都不能耗尽开发任务的大预算。
-                    break
-            if memory_action is not None:
-                # 最后一轮刚好完成写入时无需再向模型索要确认，宿主已有核验依据。
-                confirmation = memory_action.confirmation(self.memory.store) if self.memory else None
-                text = confirmation or memory_action.failure()
-                self.history.append(Message("assistant", text))
-                if confirmation and publish is not None:
-                    publish(text)
-                return finish(text, () if confirmation else ("memory_operation_unconfirmed",))
             return AgentRunResult("Reached maximum model rounds", "round_limit", rounds,
                                   list(self.history), results,
                                   Usage(prompt_tokens, completion_tokens)

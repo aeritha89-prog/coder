@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
@@ -195,32 +194,12 @@ class OpenAICompatibleModel:
         self.settings = settings
         self.stream = stream
         self.on_text = on_text
-        self._require_tool = False
-
-    @contextmanager
-    def response_options(self, *, require_tool: bool = False, defer_text: bool = False
-                         ) -> Iterator[Callable[[str], None] | None]:
-        """临时设置当前请求的工具要求，并可暂存文本直到 Agent 核验完成。
-
-        未验证的记忆草稿不能先打印再撤回。调用方只在通过核验后使用返回的
-        显示回调；异常和中断也会恢复正常对话的逐片输出设置。
-        """
-        previous_required, previous_text = self._require_tool, self.on_text
-        self._require_tool = require_tool
-        if defer_text:
-            self.on_text = None
-        try:
-            yield previous_text if defer_text and self.stream else None
-        finally:
-            self._require_tool, self.on_text = previous_required, previous_text
 
     def complete(self, messages: list[Message], tools: list[dict[str, Any]]) -> LLMReply:
         """最多尝试三次可重试错误，再把统一的 LLMReply 交给 Agent。"""
         kwargs: dict[str, Any] = {"model": self.settings.model,
                                   "messages": to_provider_messages(messages),
                                   "tools": tools, "stream": self.stream}
-        if self._require_tool:
-            kwargs["tool_choice"] = "required"
         for attempt in range(3):
             try:
                 response = self.client.chat.completions.create(**kwargs)
