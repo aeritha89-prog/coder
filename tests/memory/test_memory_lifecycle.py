@@ -80,66 +80,6 @@ def test_interrupted_initialization_rolls_back_and_can_retry(tmp_path: Path) -> 
     assert store.remember("semantic", "retry", "Initialization retry succeeded").status == "active"
 
 
-def prepare_schema2(store: MemoryStore) -> dict[str, list[tuple]]:
-    """在临时库中还原 schema 2 的两张辅助表；其余表与当前格式一致。"""
-    with sqlite3.connect(store.path) as connection:
-        connection.execute("CREATE TABLE memory_tombstones (token TEXT PRIMARY KEY, memory_id TEXT NOT NULL, created_at REAL NOT NULL)")
-        connection.execute("CREATE TABLE memory_origins (memory_id TEXT, token TEXT, PRIMARY KEY(memory_id,token))")
-        connection.execute("INSERT INTO memory_tombstones VALUES ('old-withdrawal','old-id',1)")
-        connection.execute("INSERT INTO memory_origins VALUES ('old-id','old-source')")
-        connection.execute("PRAGMA user_version=2")
-        return {table: connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
-                for table in ("metadata", "memories", "memory_versions", "memory_events")}
-
-
-def test_schema2_cleanup_is_concurrent_and_preserves_memory_and_versions(tmp_path: Path) -> None:
-    store, _ = setup(tmp_path)
-    first = store.remember("semantic", "language", "Chinese", load_policy="always", priority=80)
-    current = store.remember("semantic", "language", "English", expected_revision=first.revision)
-    before = prepare_schema2(store)
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        assert list(pool.map(lambda _: store.get(first.id), range(4))) == [current] * 4
-    assert store.get(first.id, 1).content == first.content
-    assert store.get(first.id, 1).status == "superseded"
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert tables == set(before)
-        for table, rows in before.items():
-            assert connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall() == rows
-
-
-def test_interrupted_schema2_cleanup_rolls_back_and_can_retry(tmp_path: Path) -> None:
-    store, _ = setup(tmp_path)
-    entry = store.remember("semantic", "keep", "Preserve this memory")
-    prepare_schema2(store)
-    connection = sqlite3.connect(store.path)
-    connection.set_authorizer(lambda action, table, *args: sqlite3.SQLITE_DENY
-                              if action == sqlite3.SQLITE_DROP_TABLE and table == "memory_origins"
-                              else sqlite3.SQLITE_OK)
-    try:
-        with pytest.raises(sqlite3.DatabaseError):
-            initialize_schema(connection, store.workspace)
-    finally:
-        connection.close()
-    with sqlite3.connect(store.path) as check:
-        assert check.execute("PRAGMA user_version").fetchone()[0] == 2
-        assert check.execute("SELECT COUNT(*) FROM memory_tombstones").fetchone()[0] == 1
-        assert check.execute("SELECT COUNT(*) FROM memory_origins").fetchone()[0] == 1
-    assert store.get(entry.id) == entry
-
-
-def test_schema2_cleanup_checks_workspace_before_dropping_tables(tmp_path: Path) -> None:
-    store, _ = setup(tmp_path)
-    store.remember("semantic", "keep", "Preserve this memory")
-    prepare_schema2(store)
-    original = store.path.read_bytes()
-    with sqlite3.connect(store.path) as connection:
-        with pytest.raises(ValueError, match="workspace does not match"):
-            initialize_schema(connection, "another workspace")
-    assert store.path.read_bytes() == original
-
-
 def test_only_one_concurrent_expected_revision_update_can_commit(tmp_path: Path) -> None:
     store, _ = setup(tmp_path)
     entry = store.remember("semantic", "language", "Chinese")

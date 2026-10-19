@@ -171,7 +171,7 @@ class MemoryStore:
         try:
             connection.row_factory = sqlite3.Row
             initialize_schema(connection, self.workspace)
-            # 初始化或升级后校验归属；当前格式库不在每次查询时重复 DDL 或写事务。
+            # 建库后校验归属；当前格式库不在每次查询时重复 DDL 或写事务。
             owner = connection.execute("SELECT value FROM metadata WHERE key='workspace'").fetchone()
             if owner is None or owner[0] != self.workspace:
                 raise ValueError("memory workspace does not match")

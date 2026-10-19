@@ -42,7 +42,7 @@ def test_current_database_can_be_created_concurrently(tmp_path: Path) -> None:
         assert tables == {"metadata", "memories", "memory_versions", "memory_events"}
 
 
-@pytest.mark.parametrize("version", [0, 1])
+@pytest.mark.parametrize("version", [0, 1, 2])
 def test_old_database_is_rejected_without_migration_or_modification(tmp_path: Path, version: int) -> None:
     store = store_at(tmp_path)
     saved = store.remember("semantic", "existing", "Preserve this data")

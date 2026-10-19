@@ -1,4 +1,4 @@
-"""项目记忆的事务建库、辅助表清理与有界版本日志。"""
+"""当前项目记忆的事务建库与有界版本日志。"""
 
 from __future__ import annotations
 
@@ -14,34 +14,21 @@ MAX_EVENTS = 5_000
 
 
 def initialize_schema(connection: sqlite3.Connection, workspace: str) -> None:
-    """事务创建当前库，或从 schema 2 移除已取消的两张辅助表。
-
-    schema 2 的正文和版本格式不变；升级仅删除撤销身份表，不重写记忆。
-    更旧的 schema 0/1 已有数据库继续拒绝，不恢复旧格式兼容。
-    """
+    """事务创建新库；已有数据库只接受当前 schema，不迁移或清理旧库。"""
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         raise ValueError("memory database schema is newer than this application")
     if version == SCHEMA_VERSION:
         return
-    if version not in (0, 2):
+    if version != 0:
         raise ValueError(f"unsupported memory database schema {version}; only schema {SCHEMA_VERSION} is supported")
     with connection:
-        # 并发打开时只有一个连接建库或升级；其他连接获得锁后重新检查版本。
+        # 并发打开时只有一个连接建库；其他连接获得锁后重新检查版本。
         connection.execute("BEGIN IMMEDIATE")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if version > SCHEMA_VERSION:
             raise ValueError("memory database schema is newer than this application")
         if version == SCHEMA_VERSION:
-            return
-        if version == 2:
-            # 清理前检查归属，避免错误的工作区触发数据库结构修改。
-            owner = connection.execute("SELECT value FROM metadata WHERE key='workspace'").fetchone()
-            if owner is None or owner[0] != workspace:
-                raise ValueError("memory workspace does not match")
-            connection.execute("DROP TABLE IF EXISTS memory_tombstones")
-            connection.execute("DROP TABLE IF EXISTS memory_origins")
-            connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             return
         tables = connection.execute("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall()
         if version != 0 or tables:
