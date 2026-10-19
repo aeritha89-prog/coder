@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -159,7 +160,7 @@ def test_core_budget_skips_with_diagnostics_and_leaves_budget_for_related(
     manager = MemoryManager(store, always_max_context_tokens=100)
     parts = manager.build_context("inspect", ContextManager(Settings("test", None, None, tmp_path)))
     assert not parts.core and "inspect passed" in parts.related
-    assert "预算跳过 1 项" in capsys.readouterr().err
+    assert re.search(r"预算.*跳过 1 项", capsys.readouterr().err)
 
 
 def test_crowding_drops_related_but_preserves_core_and_latest_user(tmp_path: Path) -> None:

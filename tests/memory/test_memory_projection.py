@@ -73,7 +73,19 @@ def test_missing_entry_and_invalid_reference_remain_distinct_from_call_failure(t
     assert records(invalid)[0]["result"]["state"] == "unavailable"
     assert "withdrawn body" not in repr(invalid)
     error = manager.projection.project_messages(group(call, "Error: unexpected memory argument"))
-    assert records(error)[0]["result"] == {"state": "error", "error": "Error: unexpected memory argument"}
+    assert records(error)[0]["result"] == {"state": "error"}
+
+
+@pytest.mark.parametrize("name,payload", [
+    ("memory_read", "not-json"), ("memory_read", "[]"), ("memory_read", "null"),
+    ("memory_forget", '{"deleted":1}'), ("memory_search", '{"memories":[],"omitted":-1}'),
+])
+def test_malformed_history_results_remain_invalid_not_empty_success(tmp_path: Path, name: str, payload: str) -> None:
+    _, manager = setup(tmp_path)
+    call = ToolCall("invalid", name, {})
+    for summary in (False, True):
+        view = manager.projection.project_messages(group(call, payload), summary=summary)
+        assert records(view)[0]["result"] == {"state": "invalid_result"}
 
 
 def test_unknown_diagnostic_is_still_failure_without_reintroducing_old_body(tmp_path: Path) -> None:
@@ -199,9 +211,10 @@ def test_previous_candidate_receipt_cannot_impersonate_new_preference_write(tmp_
 
 
 @pytest.mark.parametrize("memory_first", [True, False])
-def test_current_mixed_batch_preserves_exact_protocol_and_receipts(tmp_path: Path, memory_first: bool) -> None:
+@pytest.mark.parametrize("status", ["active", "candidate"])
+def test_current_mixed_batch_preserves_exact_protocol_and_receipts(tmp_path: Path, memory_first: bool, status: str) -> None:
     store, manager = setup(tmp_path)
-    entry = store.remember("semantic", "format", "plain text")
+    entry = store.remember("semantic", "format", "plain text", status=status)
     memory = ToolCall("memory", "memory_read", {"id": entry.id})
     file_call = ToolCall("file", "read_file", {"path": "README.md"})
     calls = (memory, file_call) if memory_first else (file_call, memory)
