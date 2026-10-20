@@ -1,4 +1,4 @@
-"""当前记忆生命周期：事务建库/并发，以及原始历史不变的模型视图。"""
+"""记忆事务、版本和状态，以及普通会话历史与摘要恢复。"""
 
 from __future__ import annotations
 
@@ -166,8 +166,6 @@ def test_forget_wipes_versions_and_allows_new_memory_identity(tmp_path: Path, wi
     assert value["status"] == ("active" if with_evidence else "candidate")
     assert store.get(value["id"]).content == "Chinese"
     assert store.get(first.id) is None and not store.forget(first.id)
-    old_view = manager.projection.project_messages(tool_group("memory_read", {"id": first.id}, asdict(first)))
-    assert "unavailable" in repr(old_view) and "Chinese" not in repr(old_view)
 
 
 def test_deleted_episode_can_be_saved_again_from_same_or_new_observation(tmp_path: Path) -> None:
@@ -214,40 +212,26 @@ def tool_group(name: str, fields: dict, entry: dict) -> list[Message]:
             Message("tool", json.dumps(entry), call_id=call.id)]
 
 
-def test_projection_refreshes_memory_and_forget_masks_arguments_without_changing_history(tmp_path: Path) -> None:
+def test_memory_changes_do_not_rewrite_past_tool_results(tmp_path: Path) -> None:
     store, manager = setup(tmp_path)
     entry = store.remember("semantic", "language", "Chinese")
-    group = tool_group("memory_remember", {"kind": "semantic", "key": "language", "content": "Chinese",
-                                          "evidence": "Use Chinese forever"}, asdict(entry))
-    original = repr(group)
+    history = [Message("system", "policy"), Message("user", "old request")]
+    history += tool_group("memory_remember", {"kind": "semantic", "key": "language", "content": "Chinese",
+                                              "evidence": "Use Chinese forever"}, asdict(entry))
+    history.append(Message("user", "continue"))
+    original = repr(history)
+    context = ContextManager(Settings("test", None, None, tmp_path))
     store.remember("semantic", "language", "English")
-    view = manager.projection.project_messages(group)
-    assert "English" in repr(view) and "Chinese" not in repr(view)
-    ContextManager(Settings("test", None, None, tmp_path)).validate_tool_message_groups(view)
+    assert "English" in manager.build_context("English", context).related
+    assert context.build_view(history) == history
     assert store.forget(entry.id)
-    assert "Chinese" not in repr(manager.projection.project_messages(group))
-    assert "unavailable" in repr(manager.projection.project_messages(group))
-    assert repr(group) == original
-    ordinary = tool_group("read_file", {"path": "untrusted.json"}, asdict(entry))
-    assert manager.projection.project_messages(ordinary) == ordinary
+    assert manager.build_context("English", context).related == ""
+    assert context.build_view(history) == history and repr(history) == original
+    context.validate_tool_message_groups(history)
 
 
-def test_projection_retains_failure_state_and_compact_episode_binding(tmp_path: Path) -> None:
-    store, manager = setup(tmp_path)
-    entry = store.remember("episodic", "build", "old failure")
-    call = ToolCall("call", "memory_remember", {"key": "build", "content": "changed"})
-    error = Message("tool", "Error: updating memory requires expected_revision; read its current version first", call_id=call.id)
-    projected = manager.projection.project_messages([Message("assistant", "", (call,)), error])
-    result = json.loads(projected[0].content.split("\n", 1)[1])[0]["result"]
-    assert result == {"state": "error"} and error.content not in repr(projected)
-    compact = tool_group("memory_read", {"id": entry.id}, {"id": entry.id, "revision": 1, "truncated": True})
-    store.remember("episodic", "build", "new success")
-    view = manager.projection.project_messages(compact)
-    assert "old failure" in repr(view) and "new success" not in repr(view)
-
-
-def test_structured_summary_references_update_and_restore_without_resummarizing(tmp_path: Path) -> None:
-    store, manager = setup(tmp_path)
+def test_plain_summary_restores_without_following_memory_changes(tmp_path: Path) -> None:
+    store, _ = setup(tmp_path)
     preference = store.remember("semantic", "language", "Chinese")
     event = store.remember("episodic", "build", "build previously failed")
     history = [Message("system", "policy"), Message("user", "old request")]
@@ -263,68 +247,43 @@ def test_structured_summary_references_update_and_restore_without_resummarizing(
         calls: list[list[Message]] = []
         def summarize(self, messages, previous=""):
             self.calls.append(list(messages))
-            return ContextSummary("Prior operations recorded; consult memory references.")
+            return ContextSummary("Historical preference: Chinese; build previously failed.")
     summary = Summary()
     context = ContextManager(Settings("test", None, None, tmp_path, context_window_tokens=2000), summary)
-    context.memory_projector = manager.projection
     context.build_view(history)
     assert len(summary.calls) == 1
-    assert "Chinese" not in repr(summary.calls) and "memory_references" in repr(summary.calls)
+    assert "Chinese" in repr(summary.calls) and "memory_remember" in repr(summary.calls)
     state = context.memory_state()
-    assert len(state["short_term"]["references"]) == 2 and "Chinese" not in json.dumps(state)
+    assert state["version"] == 3
+    assert set(state["short_term"]) == {"summary", "covered_keys"}
     keys = context.short_term_memory.covered_keys
     store.remember("semantic", "language", "English")
     store.remember("episodic", "build", "build now succeeded")
     rendered = repr(context.build_view(history))
-    assert "English" in rendered and "Chinese" not in rendered
+    assert "Chinese" in rendered and "English" not in rendered
     assert "build previously failed" in rendered and "build now succeeded" not in rendered
     assert context.short_term_memory.covered_keys == keys and len(summary.calls) == 1
     store.forget(preference.id)
     restored = ContextManager(context.settings, summary)
-    restored.memory_projector = manager.projection
     restored.restore_memory(state, history)
     rendered = repr(restored.build_view(history))
-    assert "Chinese" not in rendered and "English" not in rendered and "unavailable" in rendered
+    assert "Chinese" in rendered and "English" not in rendered
+    assert store.get(preference.id) is None
     assert restored.short_term_memory.covered_keys == keys and len(summary.calls) == 1
     assert repr(history) == original
 
 
-def test_reference_expansion_is_budgeted_and_missing_db_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    store, manager = setup(tmp_path)
-    entry = store.remember("semantic", "long", "中" * 500)
-    refs = [{"id": entry.id, "revision": 1, "binding": "current"}]
-    assert manager.projection.resolve_references(refs, 20) == ""
-    def unavailable(*args):
-        raise sqlite3.OperationalError("unavailable")
-    monkeypatch.setattr(store, "get", unavailable)
-    group = tool_group("memory_read", {"id": entry.id}, {"memory": asdict(entry)})
-    view = manager.projection.project_messages(group)
-    assert "unavailable" in repr(view) and "中" not in repr(view)
-
-
-@pytest.mark.parametrize("version,include_refs", [(1, True), (2, False)])
-def test_old_or_incomplete_summary_state_is_not_restored(tmp_path: Path, version: int, include_refs: bool) -> None:
+@pytest.mark.parametrize("version,complete", [(1, True), (2, True), (3, False)])
+def test_old_or_incomplete_summary_state_is_not_restored(tmp_path: Path, version: int, complete: bool) -> None:
     context = ContextManager(Settings("test", None, None, tmp_path))
     history = [Message("system", "policy"), Message("user", "old request"),
                Message("assistant", "old reply"), Message("user", "new request")]
-    short = {"summary": "old cached summary", "covered_keys": list(context._group_keys([(history[1],), (history[2],)]))}
-    if include_refs:
-        short["references"] = []
+    short = {"summary": "old cached summary"}
+    if complete:
+        short["covered_keys"] = list(context._group_keys([(history[1],), (history[2],)]))
     context.restore_memory({"version": version, "short_term": short}, history)
     assert context.short_term_memory.summary == ""
     assert context.build_view(history) == history
-
-
-def test_old_memory_tool_result_without_revision_is_not_guessed(tmp_path: Path) -> None:
-    store, manager = setup(tmp_path)
-    entry = store.remember("semantic", "language", "Chinese")
-    fields = asdict(entry)
-    fields.pop("revision")
-    group = tool_group("memory_remember", {"content": "Chinese"}, fields)
-    assert manager.projection.references_from(group) == []
-    assert "Chinese" not in repr(manager.projection.project_messages(group))
-    compact = manager.execute("memory_remember", {"kind": "semantic", "key": "candidate", "content": "new inference"}, 160)
-    assert not compact.is_error and json.loads(compact.content)["revision"] == 1
 
 
 def test_cli_status_and_historical_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:

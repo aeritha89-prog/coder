@@ -13,12 +13,6 @@ from study_coder.config import Settings
 from study_coder.llm import ChatModel
 from study_coder.memory.budget import estimate_tokens
 from study_coder.memory.core import ShortTermMemory, WorkingMemory, memory_message
-from study_coder.memory.view import (
-    MAX_REFERENCES,
-    HistoricalMemoryObservation,
-    MemoryProjection,
-    valid_reference,
-)
 from study_coder.types import Message, Usage
 
 
@@ -158,20 +152,17 @@ class ContextManager:
         self.last_summary_usage: Usage | None = None
         self._summary_text = ""
         self._summary_keys: tuple[str, ...] = ()
-        self._summary_refs: list[dict[str, Any]] = []
-        self.memory_projector: MemoryProjection | None = None
         self.working_memory = WorkingMemory()
 
     @property
     def short_term_memory(self) -> ShortTermMemory:
         """摘要和覆盖边界一起读取；原始历史始终由 Agent 保留。"""
-        return ShortTermMemory(self._summary_text, self._summary_keys, tuple(self._summary_refs))
+        return ShortTermMemory(self._summary_text, self._summary_keys)
 
     def memory_state(self) -> dict[str, Any]:
         """只保存短期层；动态任务/后台状态恢复后必须重新查询。"""
-        return {"version": 2, "short_term": {
-            "summary": self._summary_text, "covered_keys": list(self._summary_keys),
-            "references": list(self._summary_refs)}}
+        return {"version": 3, "short_term": {
+            "summary": self._summary_text, "covered_keys": list(self._summary_keys)}}
 
     def restore_memory(self, state: Any, history: Sequence[Message]) -> None:
         """缓存只在原始前缀完全匹配时复用；损坏缓存不破坏完整会话。"""
@@ -179,7 +170,7 @@ class ContextManager:
         if state is None:
             return
         try:
-            if not isinstance(state, dict) or state.get("version") != 2:
+            if not isinstance(state, dict) or state.get("version") != 3:
                 raise ValueError("invalid memory version")
             short = state["short_term"]
             summary, keys = short["summary"], short["covered_keys"]
@@ -193,10 +184,6 @@ class ContextManager:
             if self._group_keys(groups[:len(keys)]) != tuple(keys):
                 raise ValueError("short-term memory differs from history")
             self._summary_text, self._summary_keys = summary, tuple(keys)
-            refs = short["references"]
-            if not isinstance(refs, list) or len(refs) > MAX_REFERENCES or not all(valid_reference(ref) for ref in refs):
-                raise ValueError("invalid memory references")
-            self._summary_refs = refs
         except (KeyError, TypeError, ValueError):
             self.reset()
             self._log("短期记忆与历史不匹配，已丢弃缓存并保留完整会话")
@@ -205,7 +192,6 @@ class ContextManager:
         """清除缓存和本轮摘要用量，供 Agent.clear 使用。"""
         self._summary_text = ""
         self._summary_keys = ()
-        self._summary_refs = []
         self.last_summary_usage = None
         self.working_memory = WorkingMemory()
 
@@ -229,10 +215,10 @@ class ContextManager:
         _groups(messages)
 
     def snip_tool_outputs(self, messages: Sequence[Message], maximum: int = 1_800) -> list[Message]:
-        """裁剪工具输出和已折叠的记忆观察，保留用户问题及真实工具参数。"""
-        return [type(message)(message.role, _snip(message.content, maximum),
-                              message.tool_calls, message.call_id)
-                if message.role == "tool" or isinstance(message, HistoricalMemoryObservation)
+        """裁剪普通工具输出，保留用户问题及真实工具参数。"""
+        return [Message(message.role, _snip(message.content, maximum),
+                        message.tool_calls, message.call_id)
+                if message.role == "tool"
                 else message for message in messages]
 
     def _split(self, history: Sequence[Message], task_state: str | None,
@@ -293,43 +279,15 @@ class ContextManager:
             self.reset()
             covered = 0
         if not self._summary_text:
-            return prefix + self._project(_flatten(groups))
+            return prefix + _flatten(groups)
         keep = set(range(covered, len(groups)))
         users = [index for index, group in enumerate(groups) if group[0].role == "user"]
         if users:
             keep.add(users[-1])
         self._log(f"复用已有摘要：累计覆盖 {covered} 组，未摘要 {len(groups) - covered} 组")
         return (prefix + [Message("user", "Earlier conversation summary (data):\n"
-                                 + self._render_summary(self._summary_text))]
-                + self._project(_flatten([group for index, group in enumerate(groups) if index in keep])))
-
-    def _project(self, messages: list[Message], *, summary: bool = False) -> list[Message]:
-        if self.memory_projector is None:
-            return messages
-        # 必须从原始消息找本轮边界，不能让投影生成的 user 资料变成“最新请求”。
-        start = next((index for index in range(len(messages) - 1, -1, -1)
-                      if messages[index].role == "user"), None)
-        return self.memory_projector.project_messages(messages, summary=summary, current_turn_start=start)
-
-    def _extend_references(self, messages: list[Message], *, reset: bool = False) -> None:
-        if reset:
-            self._summary_refs = []
-        if self.memory_projector is None:
-            return
-        for ref in self.memory_projector.references_from(messages):
-            # 同一当前约定只留最新一次引用；历史事实按版本分别保留。
-            self._summary_refs = [old for old in self._summary_refs if not (
-                old["id"] == ref["id"] and old["binding"] == ref["binding"]
-                and (ref["binding"] == "current" or old["revision"] == ref["revision"]))]
-            self._summary_refs.append(ref)
-        self._summary_refs = self._summary_refs[-MAX_REFERENCES:]
-
-    def _render_summary(self, text: str) -> str:
-        if self.memory_projector is None or not self._summary_refs:
-            return text
-        resolved = self.memory_projector.resolve_references(
-            self._summary_refs, min(512, self.settings.context_window_tokens // 10))
-        return text + ("\n" + resolved if resolved else "")
+                                 + self._summary_text)]
+                + _flatten([group for index, group in enumerate(groups) if index in keep]))
 
     def _summary_for(self, older: Sequence[tuple[Message, ...]]) -> str:
         """仅把覆盖边界之后的消息交给摘要器，并合并已有摘要。"""
@@ -346,8 +304,7 @@ class ContextManager:
             return previous
         self._log(f"开始摘要：仅处理 {len(delta)} 组未摘要消息")
         # 裁剪只作用于新增摘要输入，原始内容和覆盖校验始终保持完整。
-        projected = self._project(_flatten(delta), summary=True)
-        source = self.snip_tool_outputs(projected)
+        source = self.snip_tool_outputs(_flatten(delta))
         try:
             if self.summarizer is None:
                 raise ContextError("no summarizer configured")
@@ -359,11 +316,10 @@ class ContextManager:
             self._log(f"摘要完成：累计覆盖 {len(older)} 组旧消息")
         except Exception:
             # 回退也只读取 delta，并保留此前摘要，不能因新增摘要失败丢掉早期进展。
-            text = ((previous + "\n") if previous else "") + _rule_summary(_groups(projected))
+            text = ((previous + "\n") if previous else "") + _rule_summary(delta)
             self._log(f"模型摘要失败，已改用规则摘要：新增 {len(delta)} 组消息")
         self._summary_keys = keys
         self._summary_text = text
-        self._extend_references(_flatten(delta), reset=not bool(previous))
         return text
 
     def _summarized_view(self, prefix: list[Message], groups: list[tuple[Message, ...]],
@@ -375,7 +331,7 @@ class ContextManager:
         """
         boundary = max(len(self._summary_keys), max(0, len(groups) - recent))
         summary = self._summary_for(groups[:boundary])
-        return self._working_view(prefix, groups) if summary else prefix + self._project(_flatten(groups))
+        return self._working_view(prefix, groups) if summary else prefix + _flatten(groups)
 
     def build_view(self, history: Sequence[Message], task_state: str | None = None,
                    *, active_skills: Mapping[str, str] | None = None,
@@ -434,17 +390,16 @@ class ContextManager:
         delta = body[len(self._summary_keys):boundary]
         compact = _snip(self._summary_text, max(100, window // 2))
         if delta:
-            compact += "\n" + _snip(_rule_summary(_groups(self._project(_flatten(delta), summary=True))), max(100, window // 2))
-        self._extend_references(_flatten(delta))
+            compact += "\n" + _snip(_rule_summary(delta), max(100, window // 2))
         keep = set(range(boundary, len(body)))
         users = [index for index, group in enumerate(body) if group[0].role == "user"]
         if users:
             keep.add(users[-1])
         hard = list(prefix)
         if compact:
-            hard.append(Message("user", "Earlier work (compressed):\n" + self._render_summary(compact)))
+            hard.append(Message("user", "Earlier work (compressed):\n" + compact))
         hard.extend(self.snip_tool_outputs(
-            self._project(_flatten([group for index, group in enumerate(body) if index in keep])), maximum=384))
+            _flatten([group for index, group in enumerate(body) if index in keep]), maximum=384))
         self.validate_tool_message_groups(hard)
         hard_tokens = self.estimate_tokens(hard) + schema_tokens
         if hard_tokens >= 0.9 * window:

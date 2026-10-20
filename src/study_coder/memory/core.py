@@ -20,7 +20,6 @@ from study_coder.memory.schema import (
     initialize_schema,
     record_change,
 )
-from study_coder.memory.view import MemoryProjection
 from study_coder.types import Message, ToolResult
 
 MEMORY_KINDS = ("semantic", "episodic", "procedural")
@@ -72,7 +71,6 @@ class ShortTermMemory:
 
     summary: str = ""
     covered_keys: tuple[str, ...] = ()
-    references: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -505,7 +503,6 @@ class MemoryManager:
         self.context_window_tokens = context_window_tokens
         self.origin = "API caller; no session checkpoint supplied"
         self.user_request: str | None = None
-        self.projection = MemoryProjection(store)
 
     def remember(self, kind: str, key: str, content: str, tags: Any = None,
                  **options: Any) -> dict[str, Any]:
