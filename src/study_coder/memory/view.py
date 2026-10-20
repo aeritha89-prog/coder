@@ -158,14 +158,6 @@ class MemoryProjection:
             if index == current_turn_start:
                 current_user_index = len(projected)
             live = current_turn_start is not None and index > current_turn_start
-            if (not live and message.role == "assistant" and not message.tool_calls
-                    and message.content.startswith("Historical memory observations (data")):
-                # 已发生过的模型回显也可能被保存在会话中。它不是宿主工具结果，
-                # 不解析其中的 JSON/引用，不据此恢复正文或承认写入成功。
-                projected.append(HistoricalMemoryObservation("user", MEMORY_OBSERVATION_HEADER
-                    + json.dumps([{"state": "unverified_assistant_echo", "result": "omitted"}])))
-                index += 1
-                continue
             if message.role != "assistant" or not any(call.name in _TOOLS for call in message.tool_calls):
                 projected.append(message)
                 index += 1
