@@ -2,13 +2,18 @@
 .cache/
 __pycache__/
 .pytest_cache/
-.pytest-tmp/
-.pytest-tmp-*/
+.pytest-*/
 .tmp/
 .uv-cache/
 .uv-python/
 .ruff_cache/
 .mypy_cache/
+.mypy-*/
 *.egg-info/
 sessions/
 .env
+
+# Local editor and agent settings
+/.claude/
+/.idea/
+/.vscode/
