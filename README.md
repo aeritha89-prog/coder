@@ -238,7 +238,7 @@ sandbox/
 
 准备以下环境：
 
-- Python 3.11+ 和 uv。
+- Python 3.11+，使用 uv 或 pip 安装依赖。
 - 已启动的 Docker，使用 Linux 容器；使用域名代理或服务端口时需要 Docker Engine 28+。
 - 支持工具调用的本地 Ollama 或远程 OpenAI 兼容模型服务。
 
@@ -250,6 +250,16 @@ uv run coder --help
 ```
 
 首次安装依赖和构建镜像需要网络。`uv sync` 安装宿主运行依赖；需要运行项目测试、Ruff 或 mypy 时，使用 `uv sync --extra dev`。容器依赖由镜像单独安装。
+
+也可以使用 pip 安装。`requirements.txt` 从锁文件导出，固定运行依赖版本，并通过 `-e .` 安装项目及 `coder` 命令：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\coder.exe --help
+```
+
+使用 pip 安装时，将下文的 `uv run coder` 替换为 `.\.venv\Scripts\coder.exe`。
 
 ### 2. 配置模型
 
