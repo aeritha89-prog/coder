@@ -9,6 +9,7 @@ import pytest
 
 from coder.agent import Agent
 from coder.config import Settings
+from coder.conversation.session import save_session
 from coder.permissions import DefaultPermissionPolicy
 from coder.sandbox.base import SandboxError
 from coder.sandbox.docker import DockerRuntime, cleanup_task, doctor
@@ -152,8 +153,15 @@ def test_agent_background_round_trip_with_real_container(runtime):
             return LLMReply("", Message("assistant", "", (call,)), (call,))
 
     model = ScriptedBackgroundModel()
+
+    def checkpoint(history):
+        # 与 CLI 一样注入保存回调，再检查后台结果已经写入会话检查点。
+        save_session(runtime.directory, "history", runtime.settings, history,
+                     agent.skill_state(), agent.context.memory_state())
+
     agent = Agent(model, default_tools(skill_catalog=runtime.skill_catalog),
-                  DefaultPermissionPolicy(yes=True), runtime.settings, runtime)
+                  DefaultPermissionPolicy(yes=True), runtime.settings, runtime,
+                  history_checkpoint=checkpoint)
     result = agent.run("Run in background, edit an independent file, and inspect the result.")
     assert result.stop_reason == "completed" and len(model.requests) == 4
     assert all(not item.is_error for item in result.tool_results)

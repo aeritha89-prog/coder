@@ -182,7 +182,7 @@ class Agent:
         """先保存完整调用组，后确认终态已交付；保存失败时不消耗后台结果。
 
         results 是本次 run 截至当前的累计工具观察；重复确认同一编号是幂等的。
-        history_checkpoint 是 CLI 注入的保存回调，无回调的真实运行时使用默认保存。
+        history_checkpoint 由调用方注入；CLI 用它保存会话，未注入时仅保留内存历史。
         """
         if self.history_checkpoint is not None:
             self.history_checkpoint(self.history)
