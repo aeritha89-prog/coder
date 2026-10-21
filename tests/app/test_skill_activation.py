@@ -7,16 +7,16 @@ from typing import Any
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.config import Settings, load_settings
-from study_coder.conversation.context import ContextError, ContextManager
-from study_coder.conversation.session import load_session_bundle, save_session
-from study_coder.llm import ScriptedLLM
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.tools import default_tools
-from study_coder.tools.base import ToolFailure
-from study_coder.tools.skillload import skill_loader
-from study_coder.types import LLMReply, Message, ToolCall, ToolResult
+from coder.agent import Agent
+from coder.config import Settings, load_settings
+from coder.conversation.context import ContextError, ContextManager
+from coder.conversation.session import load_session_bundle, save_session
+from coder.llm import ScriptedLLM
+from coder.permissions import DefaultPermissionPolicy
+from coder.tools import default_tools
+from coder.tools.base import ToolFailure
+from coder.tools.skillload import skill_loader
+from coder.types import LLMReply, Message, ToolCall, ToolResult
 
 
 class Runtime:
@@ -173,9 +173,9 @@ def test_restore_session_rejects_interrupted_tool_result_group(tmp_path: Path) -
 
 
 def test_budget_env_and_invalid_values(tmp_path: Path) -> None:
-    settings = load_settings({"STUDY_CODER_WORKSPACE": str(tmp_path),
-                              "STUDY_CODER_MAX_SKILL_CHARS": "1234",
-                              "STUDY_CODER_MAX_ACTIVE_SKILL_CHARS": "2345"})
+    settings = load_settings({"CODER_WORKSPACE": str(tmp_path),
+                              "CODER_MAX_SKILL_CHARS": "1234",
+                              "CODER_MAX_ACTIVE_SKILL_CHARS": "2345"})
     assert settings.max_skill_chars == 1234 and settings.max_active_skill_chars == 2345
     for bad in (0, -1, True, 1_000_001):
         with pytest.raises(ValueError):

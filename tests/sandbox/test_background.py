@@ -12,25 +12,25 @@ from unittest.mock import Mock
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.config import Settings
-from study_coder.conversation.context import ContextManager
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.sandbox.background import BackgroundManager, result_json, safe_display
-from study_coder.sandbox.background_runner import (
+from coder.agent import Agent
+from coder.config import Settings
+from coder.conversation.context import ContextManager
+from coder.permissions import DefaultPermissionPolicy
+from coder.sandbox.background import BackgroundManager, result_json, safe_display
+from coder.sandbox.background_runner import (
     TERMINAL,
     BoundedLog,
     job_id,
     regular_bytes,
     validate_status,
 )
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime
-from study_coder.sandbox.policy import SandboxPolicy, load_policy
-from study_coder.tools import default_tools
-from study_coder.tools.base import ToolContext
-from study_coder.tools.edit import WriteFileTool
-from study_coder.types import LLMReply, Message, ToolCall
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime
+from coder.sandbox.policy import SandboxPolicy, load_policy
+from coder.tools import default_tools
+from coder.tools.base import ToolContext
+from coder.tools.edit import WriteFileTool
+from coder.types import LLMReply, Message, ToolCall
 
 
 class ControlStub:
@@ -197,7 +197,7 @@ def test_archive_survives_prune_and_can_be_loaded_again(managed) -> None:
 
 @pytest.mark.parametrize("failure_name", ["result.json", "index.json"])
 def test_archive_failure_keeps_result_unobserved_and_is_retryable(managed, monkeypatch, failure_name) -> None:
-    from study_coder.sandbox import background
+    from coder.sandbox import background
 
     manager, control, _ = managed
     identifier = manager.start("first", 60)["job_id"]
@@ -220,7 +220,7 @@ def test_archive_failure_keeps_result_unobserved_and_is_retryable(managed, monke
 
 
 def test_completed_archive_recovers_when_index_commit_was_interrupted(managed, monkeypatch) -> None:
-    from study_coder.sandbox import background
+    from coder.sandbox import background
 
     manager, control, _ = managed
     identifier = manager.start("first", 60)["job_id"]
@@ -318,8 +318,8 @@ def test_safe_log_reader_rejects_oversized_file(tmp_path: Path) -> None:
 
 
 def test_background_policy_configuration() -> None:
-    configured = load_policy({"STUDY_CODER_SANDBOX_BACKGROUND_ENABLED": "false",
-                              "STUDY_CODER_SANDBOX_MAX_BACKGROUND_JOBS": "6"})
+    configured = load_policy({"CODER_SANDBOX_BACKGROUND_ENABLED": "false",
+                              "CODER_SANDBOX_MAX_BACKGROUND_JOBS": "6"})
     assert not configured.background_enabled and configured.max_background_jobs == 6
     assert not any(s["function"]["name"].endswith("background")
                    for s in default_tools(background_enabled=False).schemas())
@@ -527,7 +527,7 @@ def test_terminal_logs_and_tool_logs_do_not_print_job_identifiers(managed, works
 @pytest.mark.parametrize("stdout", [b"invalid JSON", b"[]", b"x" * (12 * 1024**2 + 1)],
                          ids=["invalid-json", "wrong-type", "oversized"])
 def test_control_protocol_failure_only_reaps_query_not_container(stdout, monkeypatch):
-    from study_coder.sandbox import docker
+    from coder.sandbox import docker
 
     process = Mock()
     process.stdin = io.BytesIO()
@@ -547,7 +547,7 @@ def test_control_protocol_failure_only_reaps_query_not_container(stdout, monkeyp
     runtime.cancel.assert_not_called()
     process.wait.assert_called_once()
     command = launch.call_args.args[0]
-    assert command[6:10] == ["/opt/study-coder/.venv/bin/python", "-I", "-B", "-m"]
+    assert command[6:10] == ["/opt/coder/.venv/bin/python", "-I", "-B", "-m"]
     assert command[-1] == "--control"
 
 

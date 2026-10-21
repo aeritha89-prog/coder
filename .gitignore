@@ -17,3 +17,6 @@ sessions/
 /.claude/
 /.idea/
 /.vscode/
+/.codex/
+/.agents/
+/.coder/

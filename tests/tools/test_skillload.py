@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
-from study_coder.config import Settings
-from study_coder.tools.base import ToolContext, ToolFailure
-from study_coder.tools.skillload import parse_skill, skill_loader
+from coder.config import Settings
+from coder.tools.base import ToolContext, ToolFailure
+from coder.tools.skillload import parse_skill, skill_loader
 
 
 def context(root: Path) -> ToolContext:
@@ -188,7 +188,7 @@ def test_skill_limit_rejects_without_clipping(tmp_path: Path) -> None:
 
 
 def test_empty_catalog_does_not_register_tool(tmp_path: Path) -> None:
-    from study_coder.tools import default_tools
+    from coder.tools import default_tools
 
     assert default_tools(skill_catalog={}).get("skill_loader") is None
     assert default_tools(skill_catalog=skill_loader(tmp_path).catalog()).get("skill_loader") is None

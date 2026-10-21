@@ -4,17 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.config import Settings
-from study_coder.llm import ScriptedLLM
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.sandbox.base import SandboxError
-from study_coder.tools import default_tools
-from study_coder.tools.base import ToolContext
-from study_coder.tools.edit import EditFileTool, WriteFileTool
-from study_coder.tools.read import ReadFileTool
-from study_coder.tools.search import GlobTool, GrepTool
-from study_coder.types import LLMReply, Message, ToolCall, ToolResult
+from coder.agent import Agent
+from coder.config import Settings
+from coder.llm import ScriptedLLM
+from coder.permissions import DefaultPermissionPolicy
+from coder.sandbox.base import SandboxError
+from coder.tools import default_tools
+from coder.tools.base import ToolContext
+from coder.tools.edit import EditFileTool, WriteFileTool
+from coder.tools.read import ReadFileTool
+from coder.tools.search import GlobTool, GrepTool
+from coder.types import LLMReply, Message, ToolCall, ToolResult
 
 
 class FakeDockerRuntime:
@@ -131,7 +131,7 @@ def test_task_query_failure_does_not_report_completion(
 def test_task_state_refreshes_after_tools_without_polluting_history(
     workspace: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import study_coder.tools.task as tasks
+    import coder.tools.task as tasks
     monkeypatch.setattr(tasks, "WORKDIR", workspace)
     monkeypatch.setattr(tasks, "TASKS", tasks.TaskStore(workspace / ".tasks"))
     instance, model = agent(workspace, [

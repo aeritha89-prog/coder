@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import study_coder.tools.task as task_module
-from study_coder.config import Settings
-from study_coder.tools.base import ToolContext, ToolFailure
+import coder.tools.task as task_module
+from coder.config import Settings
+from coder.tools.base import ToolContext, ToolFailure
 
 
 @pytest.fixture

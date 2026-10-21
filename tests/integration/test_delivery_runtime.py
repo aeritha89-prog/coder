@@ -6,10 +6,10 @@ import subprocess
 
 import pytest
 
-from study_coder.config import Settings
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime, apply_task, cleanup_task, doctor
-from study_coder.sandbox.policy import SandboxPolicy
+from coder.config import Settings
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime, apply_task, cleanup_task, doctor
+from coder.sandbox.policy import SandboxPolicy
 
 
 def test_cache_isolation_and_export_preflight_with_real_container(tmp_path):

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.network_proxy import ProxyHandler
-from study_coder.sandbox.policy import SandboxPolicy
+from coder.sandbox.base import SandboxError
+from coder.sandbox.network_proxy import ProxyHandler
+from coder.sandbox.policy import SandboxPolicy
 
 
 @pytest.mark.parametrize(
@@ -34,7 +34,7 @@ def test_proxy_restricts_fake_ip_exception(
         trust_fake_ip_dns=trust_fake_ip_dns,
     ))
     monkeypatch.setattr(
-        "study_coder.sandbox.network_proxy.socket.getaddrinfo",
+        "coder.sandbox.network_proxy.socket.getaddrinfo",
         lambda host, port, *, type: [(socket.AF_INET, type, 6, "", (resolved, port))],
     )
     connected: list[tuple[str, int]] = []
@@ -49,7 +49,7 @@ def test_proxy_restricts_fake_ip_exception(
         def connect(self, address: tuple[str, int]) -> None:
             connected.append(address)
 
-    monkeypatch.setattr("study_coder.sandbox.network_proxy.socket.socket", FakeSocket)
+    monkeypatch.setattr("coder.sandbox.network_proxy.socket.socket", FakeSocket)
     if accepted:
         result = handler._connect("registry.npmjs.org", 443)
         assert isinstance(result, FakeSocket)

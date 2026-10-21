@@ -1,4 +1,4 @@
-from study_coder.permissions import DefaultPermissionPolicy, PermissionRequest
+from coder.permissions import DefaultPermissionPolicy, PermissionRequest
 
 
 def test_plan_denies_even_when_session_allowed() -> None:

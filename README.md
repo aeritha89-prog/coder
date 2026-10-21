@@ -1,6 +1,6 @@
-# study-coder
+# coder
 
-study-coder 是一个基于 Docker 沙箱的命令行编程助手，支持本地 Ollama 和远程 OpenAI 兼容模型。通过连续对话，可以阅读代码、修改文件、执行开发命令、运行测试，并将容器中的项目成果审阅后写回宿主工作目录。
+coder 是一个基于 Docker 沙箱的命令行编程助手，支持本地 Ollama 和远程 OpenAI 兼容模型。通过连续对话，可以阅读代码、修改文件、执行开发命令、运行测试，并将容器中的项目成果审阅后写回宿主工作目录。
 
 - **代码操作**：按行读取、文件搜索、精确编辑、文件创建和 Shell 命令执行。
 - **任务协作**：维护任务依赖和进度，运行后台命令，管理常驻服务。
@@ -37,7 +37,7 @@ Agent 根据工具结果继续读取、修改或验证代码，直到完成任�
 ### 模块划分
 
 ```text
-src/study_coder/
+src/coder/
 ├── cli.py、config.py             命令行与配置
 ├── agent.py、llm.py、prompt.py   Agent 循环与模型接口
 ├── conversation/                上下文与会话
@@ -192,9 +192,9 @@ tests/
 
 长期记忆更新与会话历史分别保存。修改或删除长期条目后，每轮自动召回读取新状态，已经保存的聊天、工具结果和摘要保持原有内容。
 
-预算包含提示、消息和工具定义。token 数为本地估算，`STUDY_CODER_CONTEXT_WINDOW_TOKENS` 控制请求预算，不会修改模型服务器的实际上下文窗口。
+预算包含提示、消息和工具定义。token 数为本地估算，`CODER_CONTEXT_WINDOW_TOKENS` 控制请求预算，不会修改模型服务器的实际上下文窗口。
 
-`--session` 可保存和恢复命名会话。默认状态目录为 `~/.study-coder/sandbox`：
+`--session` 可保存和恢复命名会话。默认状态目录为 `~/.coder/sandbox`，可通过 `CODER_SANDBOX_STATE_DIR` 指定：
 
 ```text
 sandbox/
@@ -246,7 +246,7 @@ sandbox/
 uv --version
 docker info
 uv sync
-uv run study-coder --help
+uv run coder --help
 ```
 
 首次安装依赖和构建镜像需要网络。`uv sync` 安装宿主运行依赖；需要运行项目测试、Ruff 或 mypy 时，使用 `uv sync --extra dev`。容器依赖由镜像单独安装。
@@ -264,11 +264,11 @@ if (-not (Test-Path -LiteralPath .env)) {
 本地 Ollama 配置：
 
 ```dotenv
-STUDY_CODER_MODEL=qwen3.5:4b
-STUDY_CODER_BASE_URL=http://127.0.0.1:11434/v1
-STUDY_CODER_API_KEY=
-STUDY_CODER_CONTEXT_WINDOW_TOKENS=32000
-STUDY_CODER_MAX_ROUNDS=12
+CODER_MODEL=qwen3.5:4b
+CODER_BASE_URL=http://127.0.0.1:11434/v1
+CODER_API_KEY=
+CODER_CONTEXT_WINDOW_TOKENS=32000
+CODER_MAX_ROUNDS=12
 ```
 
 确认 Ollama 已运行并准备模型：
@@ -284,9 +284,9 @@ Invoke-RestMethod http://127.0.0.1:11434/api/tags
 使用远程 OpenAI 兼容服务时，在 `.env` 中填写服务提供的模型名称、API 地址和密钥：
 
 ```dotenv
-STUDY_CODER_MODEL=your-model-name
-STUDY_CODER_BASE_URL=https://your-model-service.example/v1
-STUDY_CODER_API_KEY=your-api-key
+CODER_MODEL=your-model-name
+CODER_BASE_URL=https://your-model-service.example/v1
+CODER_API_KEY=your-api-key
 ```
 
 `.env` 从**启动目录**读取，`-C` 只指定待处理工作区，不改变配置文件读取位置。配置优先级为对应命令行参数、进程环境变量、`.env`、代码回退值。
@@ -294,11 +294,11 @@ STUDY_CODER_API_KEY=your-api-key
 ### 3. 构建并检查沙箱
 
 ```powershell
-uv run study-coder sandbox build
-uv run study-coder sandbox doctor
+uv run coder sandbox build
+uv run coder sandbox doctor
 ```
 
-构建会准备通用工具链、Worker 和技能，默认镜像名为 `study-coder-sandbox:general`。预检检查 Docker、Linux 容器环境、镜像和执行模块。修改容器使用的源码或技能后重新运行构建命令，再启动新对话；已有任务继续使用启动时固定的镜像 ID。
+构建会准备通用工具链、Worker 和技能，默认镜像名为 `coder-sandbox:general`。预检检查 Docker、Linux 容器环境、镜像和执行模块。修改容器使用的源码或技能后重新运行构建命令，再启动新对话；已有任务继续使用启动时固定的镜像 ID。
 
 ### 4. 执行第一个任务
 
@@ -306,14 +306,14 @@ uv run study-coder sandbox doctor
 
 ```powershell
 New-Item -ItemType Directory -Force -Path .\demo-workspace | Out-Null
-uv run study-coder -C .\demo-workspace --stream --yes
+uv run coder -C .\demo-workspace --stream --yes
 ```
 
 - `-C`：指定已经存在的宿主工作区。
 - `--stream`：边生成边显示模型文字。
 - `--yes`：自动允许工具执行；未指定时按需询问权限。
 
-进入 `study-coder>` 提示符后输入需求：
+进入 `coder>` 提示符后输入需求：
 
 ```text
 创建 calculator.py，实现 divide(a, b)，b 为 0 时抛出 ZeroDivisionError；用标准库 unittest 编写 test_calculator.py，运行测试并报告结果。
@@ -327,17 +327,17 @@ uv run study-coder -C .\demo-workspace --stream --yes
 
 ```powershell
 $taskId = "替换为实际沙箱任务ID"
-uv run study-coder sandbox review $taskId
-uv run study-coder sandbox apply $taskId
+uv run coder sandbox review $taskId
+uv run coder sandbox apply $taskId
 uv run python -m unittest discover -s .\demo-workspace -p "test_*.py" -v
 ```
 
-应用后，生成文件才会进入 `demo-workspace`。如果希望退出对话后直接应用，启动时添加 `--sandbox-apply auto`，或设置 `STUDY_CODER_SANDBOX_APPLY=auto`。
+应用后，生成文件才会进入 `demo-workspace`。如果希望退出对话后直接应用，启动时添加 `--sandbox-apply auto`，或设置 `CODER_SANDBOX_APPLY=auto`。
 
 ### 6. 交互与会话恢复
 
 ```powershell
-uv run study-coder -C .\demo-workspace --session demo --stream
+uv run coder -C .\demo-workspace --session demo --stream
 ```
 
 输入需求后，程序会按需询问工具权限。输入 `y` 允许本次调用，`a` 在当前交互期间持续允许该工具，`n` 拒绝。
@@ -356,19 +356,19 @@ uv run study-coder -C .\demo-workspace --session demo --stream
 也可以直接管理长期记忆，这些命令无需启动模型或 Docker：
 
 ```powershell
-uv run study-coder memory remember -C .\demo-workspace --kind semantic --key reply_language --content "使用中文回复"
-uv run study-coder memory remember -C .\demo-workspace --kind procedural --key test_command --content "在项目根目录运行 python -m unittest discover -v"
-uv run study-coder memory remember -C .\demo-workspace --kind semantic --key explanation.function_order --content "先解释输入输出，再逐行讲解函数" --load-policy always --priority 80
-uv run study-coder memory list -C .\demo-workspace --load-policy always
-uv run study-coder memory list -C .\demo-workspace
-uv run study-coder memory search "测试" -C .\demo-workspace
-uv run study-coder memory list -C .\demo-workspace --status candidate
-uv run study-coder memory read mem_替换为实际编号 -C .\demo-workspace
-uv run study-coder memory read mem_替换为实际编号 -C .\demo-workspace --revision 1
-uv run study-coder memory approve mem_替换为实际编号 -C .\demo-workspace --expected-revision 1
-uv run study-coder memory archive mem_替换为实际编号 -C .\demo-workspace --expected-revision 2
-uv run study-coder memory status mem_替换为实际编号 -C .\demo-workspace --status stale
-uv run study-coder memory forget mem_替换为实际编号 -C .\demo-workspace
+uv run coder memory remember -C .\demo-workspace --kind semantic --key reply_language --content "使用中文回复"
+uv run coder memory remember -C .\demo-workspace --kind procedural --key test_command --content "在项目根目录运行 python -m unittest discover -v"
+uv run coder memory remember -C .\demo-workspace --kind semantic --key explanation.function_order --content "先解释输入输出，再逐行讲解函数" --load-policy always --priority 80
+uv run coder memory list -C .\demo-workspace --load-policy always
+uv run coder memory list -C .\demo-workspace
+uv run coder memory search "测试" -C .\demo-workspace
+uv run coder memory list -C .\demo-workspace --status candidate
+uv run coder memory read mem_替换为实际编号 -C .\demo-workspace
+uv run coder memory read mem_替换为实际编号 -C .\demo-workspace --revision 1
+uv run coder memory approve mem_替换为实际编号 -C .\demo-workspace --expected-revision 1
+uv run coder memory archive mem_替换为实际编号 -C .\demo-workspace --expected-revision 2
+uv run coder memory status mem_替换为实际编号 -C .\demo-workspace --status stale
+uv run coder memory forget mem_替换为实际编号 -C .\demo-workspace
 ```
 
 长期条目在同一工作区的不同会话间共享，不会写入任务容器或随文件成果导出。`--session` 用于恢复对话和短期摘要；不指定会话名也能召回该项目的长期记忆。
@@ -381,32 +381,32 @@ uv run study-coder memory forget mem_替换为实际编号 -C .\demo-workspace
 
 | 环境变量 | 起始值 | 用途 |
 | --- | --- | --- |
-| `STUDY_CODER_MAX_ROUNDS` | `12` | 每次任务的模型循环上限 |
-| `STUDY_CODER_CONTEXT_WINDOW_TOKENS` | `32000` | 本地估算的请求上下文预算 |
-| `STUDY_CODER_REQUEST_TIMEOUT_S` | `60` | 单次模型请求超时 |
-| `STUDY_CODER_COMMAND_TIMEOUT_S` | `60` | 前台命令默认超时，秒 |
-| `STUDY_CODER_MAX_TOOL_OUTPUT_CHARS` | `12000` | 工具返回给模型的文本长度上限 |
-| `STUDY_CODER_MEMORY_ENABLED` | `true` | 启用项目长期记忆及对应工具 |
-| `STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS` | `1200` | 常驻与按需资料的合计 token 预算，同时不超过上下文窗口的 10% |
-| `STUDY_CODER_MEMORY_TOP_K` | `6` | 每轮自动召回的候选条目数 |
-| `STUDY_CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS` | `256` | 常驻资料预算上限，计入总预算，包含边界提示 |
-| `STUDY_CODER_MEMORY_ALWAYS_MAX_ENTRIES` | `8` | 每轮独立读取的常驻候选条目上限 |
-| `STUDY_CODER_MEMORY_MAX_ENTRIES` | `1000` | 每个项目的长期记忆容量 |
-| `STUDY_CODER_MEMORY_AUTO_EPISODE` | `true` | 自动归档本轮工具观察为情景记忆 |
-| `STUDY_CODER_SANDBOX_MAX_COMMAND_TIMEOUT_S` | `1800` | 前台与后台命令允许的最大超时 |
-| `STUDY_CODER_SANDBOX_BACKGROUND_ENABLED` | `true` | 是否提供后台命令工具 |
-| `STUDY_CODER_SANDBOX_MAX_BACKGROUND_JOBS` | `4` | 后台命令并发上限 |
-| `STUDY_CODER_SANDBOX_CPUS` | `2` | 容器 CPU 配额 |
-| `STUDY_CODER_SANDBOX_MEMORY_MB` | `4096` | 容器内存上限，MiB |
-| `STUDY_CODER_SANDBOX_NETWORK` | `none` | `none` 禁用网络；`allowlist` 启用域名代理 |
-| `STUDY_CODER_SANDBOX_SERVICE_PORTS` | 空 | 可管理的服务端口，逗号分隔 |
-| `STUDY_CODER_SANDBOX_APPLY` | `review` | `review` 手动审阅应用；`auto` 自动应用 |
+| `CODER_MAX_ROUNDS` | `12` | 每次任务的模型循环上限 |
+| `CODER_CONTEXT_WINDOW_TOKENS` | `32000` | 本地估算的请求上下文预算 |
+| `CODER_REQUEST_TIMEOUT_S` | `60` | 单次模型请求超时 |
+| `CODER_COMMAND_TIMEOUT_S` | `60` | 前台命令默认超时，秒 |
+| `CODER_MAX_TOOL_OUTPUT_CHARS` | `12000` | 工具返回给模型的文本长度上限 |
+| `CODER_MEMORY_ENABLED` | `true` | 启用项目长期记忆及对应工具 |
+| `CODER_MEMORY_MAX_CONTEXT_TOKENS` | `1200` | 常驻与按需资料的合计 token 预算，同时不超过上下文窗口的 10% |
+| `CODER_MEMORY_TOP_K` | `6` | 每轮自动召回的候选条目数 |
+| `CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS` | `256` | 常驻资料预算上限，计入总预算，包含边界提示 |
+| `CODER_MEMORY_ALWAYS_MAX_ENTRIES` | `8` | 每轮独立读取的常驻候选条目上限 |
+| `CODER_MEMORY_MAX_ENTRIES` | `1000` | 每个项目的长期记忆容量 |
+| `CODER_MEMORY_AUTO_EPISODE` | `true` | 自动归档本轮工具观察为情景记忆 |
+| `CODER_SANDBOX_MAX_COMMAND_TIMEOUT_S` | `1800` | 前台与后台命令允许的最大超时 |
+| `CODER_SANDBOX_BACKGROUND_ENABLED` | `true` | 是否提供后台命令工具 |
+| `CODER_SANDBOX_MAX_BACKGROUND_JOBS` | `4` | 后台命令并发上限 |
+| `CODER_SANDBOX_CPUS` | `2` | 容器 CPU 配额 |
+| `CODER_SANDBOX_MEMORY_MB` | `4096` | 容器内存上限，MiB |
+| `CODER_SANDBOX_NETWORK` | `none` | `none` 禁用网络；`allowlist` 启用域名代理 |
+| `CODER_SANDBOX_SERVICE_PORTS` | 空 | 可管理的服务端口，逗号分隔 |
+| `CODER_SANDBOX_APPLY` | `review` | `review` 手动审阅应用；`auto` 自动应用 |
 
 任务需要安装 Python 或 npm 依赖时，可在启动前配置域名代理：
 
 ```dotenv
-STUDY_CODER_SANDBOX_NETWORK=allowlist
-STUDY_CODER_SANDBOX_NETWORK_ALLOWLIST=pypi.org,files.pythonhosted.org,registry.npmjs.org,*.npmjs.org
+CODER_SANDBOX_NETWORK=allowlist
+CODER_SANDBOX_NETWORK_ALLOWLIST=pypi.org,files.pythonhosted.org,registry.npmjs.org,*.npmjs.org
 ```
 
 白名单只允许列出的域名及匹配的子域名；镜像源、重定向、Git 仓库或额外下载地址需要分别加入。配置修改对下一次创建的任务生效。容器根文件系统只读，Python 项目通常需要在工作区创建虚拟环境后安装依赖。
@@ -414,17 +414,17 @@ STUDY_CODER_SANDBOX_NETWORK_ALLOWLIST=pypi.org,files.pythonhosted.org,registry.n
 如需搜索工具，另行配置：
 
 ```dotenv
-STUDY_CODER_SANDBOX_ALLOW_WEB_SEARCH=true
+CODER_SANDBOX_ALLOW_WEB_SEARCH=true
 TAVILY_API_KEY=your-search-api-key
 ```
 
 ### 8. 任务状态与恢复
 
 ```powershell
-uv run study-coder sandbox list
-uv run study-coder sandbox export $taskId
-uv run study-coder sandbox recover $taskId
-uv run study-coder sandbox cleanup $taskId
+uv run coder sandbox list
+uv run coder sandbox export $taskId
+uv run coder sandbox recover $taskId
+uv run coder sandbox cleanup $taskId
 ```
 
 - `list`：查看已记录的沙箱任务。
@@ -435,7 +435,7 @@ uv run study-coder sandbox cleanup $taskId
 导出失败涉及下载的工具链或缓存时，可给已有任务追加排除规则：
 
 ```powershell
-uv run study-coder sandbox export $taskId `
+uv run coder sandbox export $taskId `
   --exclude "toolchain/jdk25" `
   --exclude "gradlehome/caches"
 ```

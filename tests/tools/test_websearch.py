@@ -16,9 +16,9 @@ from tavily import (
 )
 from tavily import TimeoutError as TavilyTimeoutError
 
-from study_coder.config import Settings
-from study_coder.tools.base import ToolContext
-from study_coder.tools.websearch import web_search
+from coder.config import Settings
+from coder.tools.base import ToolContext
+from coder.tools.websearch import web_search
 
 
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ def test_web_search_classifies_provider_errors(
             assert max_results == 5
             raise failure
 
-    websearch_module = importlib.import_module("study_coder.tools.websearch")
+    websearch_module = importlib.import_module("coder.tools.websearch")
     monkeypatch.setattr(websearch_module, "TavilyClient", FailingClient)
     settings = Settings("scripted", None, None, workspace)
     context = ToolContext(workspace, workspace, settings)

@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.cli import main
-from study_coder.config import Settings
-from study_coder.conversation.context import ContextManager
-from study_coder.memory.budget import core_tokens
-from study_coder.memory.core import MemoryManager, MemoryStore
-from study_coder.types import Message
+from coder.cli import main
+from coder.config import Settings
+from coder.conversation.context import ContextManager
+from coder.memory.budget import core_tokens
+from coder.memory.core import MemoryManager, MemoryStore
+from coder.types import Message
 
 
 def setup_memory(root: Path) -> tuple[MemoryStore, MemoryManager]:
@@ -58,9 +58,9 @@ def test_budget_demotion_cannot_bypass_requested_always_evidence(tmp_path: Path)
 def test_cli_uses_same_budget_as_model_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                           capsys: pytest.CaptureFixture) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("STUDY_CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS", "256")
-    monkeypatch.setenv("STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS", "1200")
+    monkeypatch.setenv("CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS", "256")
+    monkeypatch.setenv("CODER_MEMORY_MAX_CONTEXT_TOKENS", "1200")
     assert main(["memory", "remember", "-C", str(tmp_path), "--kind", "semantic", "--key", "long",
                  "--content", "中" * 300, "--load-policy", "always"]) == 0
     result = json.loads(capsys.readouterr().out)

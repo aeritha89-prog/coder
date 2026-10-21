@@ -7,8 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime
 
 
 @pytest.fixture
@@ -16,8 +16,8 @@ def query_process(monkeypatch: pytest.MonkeyPatch) -> Mock:
     process = Mock()
     process.returncode = 0
     process.communicate.return_value = (b"{}\n", b"")
-    monkeypatch.setattr("study_coder.sandbox.docker._docker_executable", lambda: "docker")
-    monkeypatch.setattr("study_coder.sandbox.docker.subprocess.Popen", Mock(return_value=process))
+    monkeypatch.setattr("coder.sandbox.docker._docker_executable", lambda: "docker")
+    monkeypatch.setattr("coder.sandbox.docker.subprocess.Popen", Mock(return_value=process))
     return process
 
 
@@ -81,16 +81,16 @@ def test_interrupt_kills_query_and_remains_an_interrupt(query_process: Mock) -> 
 
 def test_query_pins_workspace_and_isolated_python(query_process: Mock) -> None:
     query_runtime().get_incomplete_tasks()
-    from study_coder.sandbox import docker
+    from coder.sandbox import docker
     args = docker.subprocess.Popen.call_args.args[0]
     assert args[:5] == ["docker", "exec", "--workdir", "/workspace", "test-container"]
-    assert args[5:9] == ["/opt/study-coder/.venv/bin/python", "-I", "-B", "-c"]
+    assert args[5:9] == ["/opt/coder/.venv/bin/python", "-I", "-B", "-c"]
 
 
 def test_process_start_failure_is_a_sandbox_error(
     query_process: Mock, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("study_coder.sandbox.docker.subprocess.Popen", Mock(side_effect=OSError("missing")))
+    monkeypatch.setattr("coder.sandbox.docker.subprocess.Popen", Mock(side_effect=OSError("missing")))
     with pytest.raises(SandboxError, match="task query could not start"):
         query_runtime().get_incomplete_tasks()
 

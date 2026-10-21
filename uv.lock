@@ -1461,7 +1461,7 @@ wheels = [
 ]
 
 [[package]]
-name = "study-coder"
+name = "coder"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

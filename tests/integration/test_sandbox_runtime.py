@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.config import Settings
-from study_coder.llm import ScriptedLLM
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime, apply_task, doctor
-from study_coder.sandbox.policy import SandboxPolicy
-from study_coder.tools import default_tools
-from study_coder.tools.skillload import skill_loader
-from study_coder.types import LLMReply, Message, ToolCall
+from coder.agent import Agent
+from coder.config import Settings
+from coder.llm import ScriptedLLM
+from coder.permissions import DefaultPermissionPolicy
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime, apply_task, doctor
+from coder.sandbox.policy import SandboxPolicy
+from coder.tools import default_tools
+from coder.tools.skillload import skill_loader
+from coder.types import LLMReply, Message, ToolCall
 
 
 def test_real_container_tools_and_reviewed_export(
@@ -60,7 +60,7 @@ def test_real_container_tools_and_reviewed_export(
         assert sum(message.content.count(body) for message in model.requests[1]) == 1
         agent.context.validate_tool_message_groups(model.requests[1])
         assert runtime.execute_tool("bash", {"command":
-                                             "touch /opt/study-coder/skills/write-test"}).is_error
+                                             "touch /opt/coder/skills/write-test"}).is_error
         identity = runtime.execute_tool("bash", {"command": "id -u"})
         assert not identity.is_error and "10001" in identity.content
         assert runtime.execute_tool("bash", {"command": "touch /root-write-test"}).is_error
@@ -119,6 +119,6 @@ def test_real_container_tools_and_reviewed_export(
     finally:
         if runtime.running:
             runtime.cancel()
-        if runtime.volume.startswith("study-coder-"):
+        if runtime.volume.startswith("coder-"):
             subprocess.run([docker, "volume", "rm", runtime.volume],
                            capture_output=True, timeout=15, check=False)

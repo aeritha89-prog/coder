@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from study_coder.config import Settings
-from study_coder.tools.base import ToolContext, ToolRegistry
-from study_coder.tools.bash import SandboxBashTool
-from study_coder.tools.edit import EditFileTool, WriteFileTool
-from study_coder.tools.read import ReadFileTool
-from study_coder.tools.search import GlobTool, GrepTool
+from coder.config import Settings
+from coder.tools.base import ToolContext, ToolRegistry
+from coder.tools.bash import SandboxBashTool
+from coder.tools.edit import EditFileTool, WriteFileTool
+from coder.tools.read import ReadFileTool
+from coder.tools.search import GlobTool, GrepTool
 
 
 def context(workspace: Path, **overrides: int) -> ToolContext:

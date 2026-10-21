@@ -4,20 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.config import Settings
-from study_coder.conversation.context import (
+from coder.agent import Agent
+from coder.config import Settings
+from coder.conversation.context import (
     ContextError,
     ContextManager,
     ContextSummary,
     ModelSummarizer,
 )
-from study_coder.conversation.session import load_session_bundle, save_session
-from study_coder.llm import ScriptedLLM
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.tools.base import ToolContext, ToolRegistry
-from study_coder.tools.read import ReadFileTool
-from study_coder.types import LLMReply, Message, ToolCall, ToolResult, Usage
+from coder.conversation.session import load_session_bundle, save_session
+from coder.llm import ScriptedLLM
+from coder.permissions import DefaultPermissionPolicy
+from coder.tools.base import ToolContext, ToolRegistry
+from coder.tools.read import ReadFileTool
+from coder.types import LLMReply, Message, ToolCall, ToolResult, Usage
 
 
 class FakeReadRuntime:

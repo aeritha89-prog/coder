@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from study_coder import cli
-from study_coder.config import Settings
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime, apply_task, cleanup_task, doctor
-from study_coder.sandbox.manifest import load_record
-from study_coder.sandbox.policy import SandboxPolicy
+from coder import cli
+from coder.config import Settings
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime, apply_task, cleanup_task, doctor
+from coder.sandbox.manifest import load_record
+from coder.sandbox.policy import SandboxPolicy
 
 
 def test_real_export_cli_excludes_links_and_preserves_host_files(

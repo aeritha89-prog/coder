@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-import study_coder.cli as cli
-from study_coder.cli import main
-from study_coder.config import Settings, load_settings
-from study_coder.conversation.session import load_session_bundle, save_session, session_path
-from study_coder.llm import ScriptedLLM
-from study_coder.types import LLMReply, Message, ToolCall, ToolResult
+import coder.cli as cli
+from coder.cli import main
+from coder.config import Settings, load_settings
+from coder.conversation.session import load_session_bundle, save_session, session_path
+from coder.llm import ScriptedLLM
+from coder.types import LLMReply, Message, ToolCall, ToolResult
 
 
 class StubDockerRuntime:
@@ -45,7 +45,7 @@ class StubDockerRuntime:
 @pytest.fixture
 def docker_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> StubDockerRuntime:
     runtime = StubDockerRuntime(tmp_path / "runtime")
-    monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(cli.DockerRuntime, "start", lambda settings, policy: runtime)
     return runtime
 
@@ -86,7 +86,7 @@ def test_config_and_cli(workspace: Path, tmp_path: Path, capsys: pytest.CaptureF
                         docker_stub: StubDockerRuntime) -> None:
     # CLI 从当前目录读取 .env；这个测试需要隔离开发者真实的本地配置。
     monkeypatch.chdir(tmp_path)
-    settings = load_settings({"STUDY_CODER_WORKSPACE": str(workspace)})
+    settings = load_settings({"CODER_WORKSPACE": str(workspace)})
     assert settings.api_key is None
     assert (settings.model, settings.base_url) == ("qwen3.5:4b", "http://127.0.0.1:11434/v1")
     with pytest.raises(ValueError):
@@ -96,17 +96,17 @@ def test_config_and_cli(workspace: Path, tmp_path: Path, capsys: pytest.CaptureF
     assert help_exit.value.code == 0
     assert main(["-C", str(workspace / "missing")]) == 2
     assert main(["-C", str(workspace), "--max-rounds", "0"]) == 2
-    monkeypatch.delenv("STUDY_CODER_API_KEY", raising=False)
+    monkeypatch.delenv("CODER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("STUDY_CODER_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("CODER_BASE_URL", "https://example.test/v1")
     assert main(["-C", str(workspace)]) == 2
     assert "API key required" in capsys.readouterr().err
 
 
 def test_local_backend_is_rejected(workspace: Path) -> None:
     with pytest.raises(ValueError, match="only Docker execution is supported"):
-        load_settings({"STUDY_CODER_WORKSPACE": str(workspace),
-                       "STUDY_CODER_EXECUTION_BACKEND": "local"})
+        load_settings({"CODER_WORKSPACE": str(workspace),
+                       "CODER_EXECUTION_BACKEND": "local"})
     with pytest.raises(SystemExit) as failure:
         main(["--sandbox", "local"])
     assert failure.value.code == 2
@@ -147,15 +147,15 @@ def test_current_session_does_not_fill_missing_memory_fields(workspace: Path) ->
 def test_dotenv_settings_and_shell_priority(workspace: Path, tmp_path: Path) -> None:
     dotenv_path = tmp_path / ".env"
     dotenv_path.write_text(
-        "STUDY_CODER_API_KEY=file-key\nSTUDY_CODER_MODEL=file-model\n"
-        "STUDY_CODER_BASE_URL=https://example.test/v1\nSTUDY_CODER_MAX_ROUNDS=4\n"
-        "STUDY_CODER_REQUEST_TIMEOUT_S=30\n", encoding="utf-8")
-    from_file = load_settings({"STUDY_CODER_WORKSPACE": str(workspace)}, dotenv_path)
+        "CODER_API_KEY=file-key\nCODER_MODEL=file-model\n"
+        "CODER_BASE_URL=https://example.test/v1\nCODER_MAX_ROUNDS=4\n"
+        "CODER_REQUEST_TIMEOUT_S=30\n", encoding="utf-8")
+    from_file = load_settings({"CODER_WORKSPACE": str(workspace)}, dotenv_path)
     assert (from_file.api_key, from_file.model, from_file.max_rounds) == ("file-key", "file-model", 4)
     assert from_file.base_url == "https://example.test/v1"
     assert from_file.request_timeout_s == 30
-    overridden = load_settings({"STUDY_CODER_WORKSPACE": str(workspace),
-                                "OPENAI_API_KEY": "shell-key", "STUDY_CODER_MODEL": "shell-model"},
+    overridden = load_settings({"CODER_WORKSPACE": str(workspace),
+                                "OPENAI_API_KEY": "shell-key", "CODER_MODEL": "shell-model"},
                                dotenv_path)
     assert (overridden.api_key, overridden.model) == ("shell-key", "shell-model")
 
@@ -163,10 +163,10 @@ def test_dotenv_settings_and_shell_priority(workspace: Path, tmp_path: Path) -> 
 def test_cli_reads_dotenv_and_cli_wins(workspace: Path, tmp_path: Path,
                                        monkeypatch: pytest.MonkeyPatch,
                                        docker_stub: StubDockerRuntime) -> None:
-    (tmp_path / ".env").write_text("STUDY_CODER_API_KEY=file-key\n"
-                                   "STUDY_CODER_MODEL=file-model\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("CODER_API_KEY=file-key\n"
+                                   "CODER_MODEL=file-model\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    for key in ("STUDY_CODER_API_KEY", "OPENAI_API_KEY", "STUDY_CODER_MODEL"):
+    for key in ("CODER_API_KEY", "OPENAI_API_KEY", "CODER_MODEL"):
         monkeypatch.delenv(key, raising=False)
     captured: list[Settings] = []
 
@@ -305,7 +305,7 @@ def test_dialogue_requests_permission_and_exports_only_after_exit(
 
     monkeypatch.setattr("builtins.input", read_input)
     assert main(["-C", str(workspace)]) == 0
-    assert prompts == ["study-coder> ", "> ", "study-coder> ", "study-coder> "]
+    assert prompts == ["coder> ", "> ", "coder> ", "coder> "]
     assert executed == ["bash"] and exports == ["export"]
     assert [m.content for m in model.requests[-1] if m.role == "user"][-2:] == [
         "first task", "second task"]

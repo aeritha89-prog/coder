@@ -11,12 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.cli import main
-from study_coder.config import Settings
-from study_coder.conversation.context import ContextManager, ContextSummary
-from study_coder.memory.core import MemoryManager, MemoryStore
-from study_coder.memory.schema import fingerprint, initialize_schema, record_change
-from study_coder.types import Message, ToolCall, ToolResult
+from coder.cli import main
+from coder.config import Settings
+from coder.conversation.context import ContextManager, ContextSummary
+from coder.memory.core import MemoryManager, MemoryStore
+from coder.memory.schema import fingerprint, initialize_schema, record_change
+from coder.types import Message, ToolCall, ToolResult
 
 
 def setup(root: Path, maximum: int = 1000) -> tuple[MemoryStore, MemoryManager]:
@@ -135,7 +135,7 @@ def test_full_content_and_short_recall_are_separate_and_budgeted(tmp_path: Path)
 
 
 def test_version_and_event_retention_are_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import study_coder.memory.schema as schema
+    import coder.memory.schema as schema
     monkeypatch.setattr(schema, "MAX_EVENTS", 5)
     store, _ = setup(tmp_path)
     for index in range(25):
@@ -288,7 +288,7 @@ def test_old_or_incomplete_summary_state_is_not_restored(tmp_path: Path, version
 
 def test_cli_status_and_historical_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
     store, _ = setup(tmp_path)
     first = store.remember("procedural", "tests", "Run pytest", status="candidate", source_kind="model_inferred")
     common = ["-C", str(tmp_path)]

@@ -11,15 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.cli import main
-from study_coder.config import Settings, load_settings
-from study_coder.conversation.context import ContextManager
-from study_coder.llm import ScriptedLLM
-from study_coder.memory.core import MemoryManager, MemoryStore, memory_message
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.tools import default_tools
-from study_coder.types import LLMReply, Message, ToolCall, ToolResult
+from coder.agent import Agent
+from coder.cli import main
+from coder.config import Settings, load_settings
+from coder.conversation.context import ContextManager
+from coder.llm import ScriptedLLM
+from coder.memory.core import MemoryManager, MemoryStore, memory_message
+from coder.permissions import DefaultPermissionPolicy
+from coder.tools import default_tools
+from coder.types import LLMReply, Message, ToolCall, ToolResult
 
 
 def store_at(root: Path) -> MemoryStore:
@@ -270,7 +270,7 @@ def test_cli_can_set_list_demote_and_delete_open_preferences(
 ) -> None:
     store = store_at(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
     common = ["-C", store.workspace]
     remember = ["memory", "remember", *common, "--kind", "procedural", "--key", "any.user.chosen.rule",
                 "--content", "Explain the function inputs before its implementation."]
@@ -287,9 +287,9 @@ def test_cli_can_set_list_demote_and_delete_open_preferences(
 
 
 def test_always_configuration_is_loaded_and_checked(tmp_path: Path) -> None:
-    settings = load_settings({"STUDY_CODER_WORKSPACE": os.fspath(tmp_path),
-                              "STUDY_CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS": "512",
-                              "STUDY_CODER_MEMORY_ALWAYS_MAX_ENTRIES": "12"})
+    settings = load_settings({"CODER_WORKSPACE": os.fspath(tmp_path),
+                              "CODER_MEMORY_ALWAYS_MAX_CONTEXT_TOKENS": "512",
+                              "CODER_MEMORY_ALWAYS_MAX_ENTRIES": "12"})
     assert settings.memory_always_max_context_tokens == 512
     assert settings.memory_always_max_entries == 12
     for field, value in (("memory_always_max_context_tokens", 0), ("memory_always_max_entries", True),

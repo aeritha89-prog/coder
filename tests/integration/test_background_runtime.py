@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.config import Settings
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime, cleanup_task, doctor
-from study_coder.sandbox.policy import SandboxPolicy
-from study_coder.tools import default_tools
-from study_coder.types import LLMReply, Message, ToolCall
+from coder.agent import Agent
+from coder.config import Settings
+from coder.permissions import DefaultPermissionPolicy
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime, cleanup_task, doctor
+from coder.sandbox.policy import SandboxPolicy
+from coder.tools import default_tools
+from coder.types import LLMReply, Message, ToolCall
 
 
 @pytest.fixture
@@ -46,9 +46,9 @@ def execute(runtime, name, arguments):
 
 def test_parallel_edit_foreground_command_notifications_and_exit_archive(runtime):
     # 工作区中恶意同名包不能遮蔽 -I 启动的 Worker 和后台 runner。
-    prepared = runtime.execute_tool("bash", {"command": "mkdir study_coder"})
+    prepared = runtime.execute_tool("bash", {"command": "mkdir coder"})
     assert not prepared.is_error, prepared.content
-    planted = runtime.execute_tool("write_file", {"path": "study_coder/__init__.py",
+    planted = runtime.execute_tool("write_file", {"path": "coder/__init__.py",
                                                   "content": "raise RuntimeError('workspace package imported')"})
     assert not planted.is_error
     first = execute(runtime, "start_background", {
@@ -87,7 +87,7 @@ def test_parallel_edit_foreground_command_notifications_and_exit_archive(runtime
     assert archived["status"] == "cancelled" and archived["cleanup_confirmed"]
     assert b"BEFORE_EXIT" in (runtime.directory / "background" / pending / "output.head").read_bytes()
     assert "foreground.txt" in diff["added"]
-    assert not any("study-coder-background" in path for paths in diff.values() for path in paths)
+    assert not any("coder-background" in path for paths in diff.values() for path in paths)
     assert not (runtime.settings.workspace / "foreground.txt").exists()
 
 

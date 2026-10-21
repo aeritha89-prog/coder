@@ -1,4 +1,10 @@
 .git
+.claude
+.idea
+.vscode
+.codex
+.agents
+.coder
 .venv
 .cache
 .uv-cache

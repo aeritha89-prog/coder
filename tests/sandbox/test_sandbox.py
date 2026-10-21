@@ -9,24 +9,24 @@ from typing import Any
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.cli import main
-from study_coder.config import Settings
-from study_coder.llm import ScriptedLLM
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.sandbox import worker
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import _format_export_failure, doctor
-from study_coder.sandbox.policy import SandboxPolicy, load_policy
-from study_coder.sandbox.transfer import (
+from coder.agent import Agent
+from coder.cli import main
+from coder.config import Settings
+from coder.llm import ScriptedLLM
+from coder.permissions import DefaultPermissionPolicy
+from coder.sandbox import worker
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import _format_export_failure, doctor
+from coder.sandbox.policy import SandboxPolicy, load_policy
+from coder.sandbox.transfer import (
     apply_changes,
     changes,
     create_import_archive,
     extract_export,
     tar_exclude_patterns,
 )
-from study_coder.tools import default_tools
-from study_coder.types import ToolCall, ToolResult
+from coder.tools import default_tools
+from coder.types import ToolCall, ToolResult
 
 
 def _archive(entries: list[tuple[str, bytes | None, bytes]]) -> io.BytesIO:
@@ -125,7 +125,7 @@ def test_export_skips_oversized_cache_and_keeps_artifact(
     relative: str, exclude: tuple[str, ...],
 ) -> None:
     # 缩小单文件阈值，覆盖实际的大缓存情形，避免分配真实的大文件。
-    monkeypatch.setattr("study_coder.sandbox.transfer.MAX_FILE_BYTES", 16)
+    monkeypatch.setattr("coder.sandbox.transfer.MAX_FILE_BYTES", 16)
     exported = _archive([(relative, b"x" * 17, tarfile.REGTYPE),
                          ("build/libs/app.jar", b"jar", tarfile.REGTYPE)])
     staging = tmp_path / "export"
@@ -146,7 +146,7 @@ def test_export_member_limit_still_counts_excluded_entries(tmp_path: Path) -> No
 def test_export_keeps_limits_for_included_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: str,
 ) -> None:
-    monkeypatch.setattr("study_coder.sandbox.transfer.MAX_FILE_BYTES", 16)
+    monkeypatch.setattr("coder.sandbox.transfer.MAX_FILE_BYTES", 16)
     data = b"x" * 17 if limit == "file_size" else b"x"
     count = 1 if limit == "file_size" else 2
     exported = _archive([(f"src/file{index}", data, tarfile.REGTYPE)
@@ -217,8 +217,8 @@ def test_policy_rejects_unsupported_network_and_docker_fails_closed(
     workspace: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with pytest.raises(SandboxError, match="sandbox network must be none or allowlist"):
-        load_policy({"STUDY_CODER_SANDBOX_NETWORK": "bridge"})
-    monkeypatch.setattr("study_coder.sandbox.docker.shutil.which", lambda _: None)
+        load_policy({"CODER_SANDBOX_NETWORK": "bridge"})
+    monkeypatch.setattr("coder.sandbox.docker.shutil.which", lambda _: None)
     with pytest.raises(SandboxError, match="Docker CLI"):
         doctor(SandboxPolicy(state_dir=workspace.parent / "state"))
 
@@ -265,8 +265,8 @@ def test_worker_file_tools_share_one_workspace(
 def test_cli_docker_selection_does_not_fall_back_to_local(
     workspace: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("study_coder.sandbox.docker.shutil.which", lambda _: None)
-    monkeypatch.setattr("study_coder.cli.OpenAICompatibleModel",
+    monkeypatch.setattr("coder.sandbox.docker.shutil.which", lambda _: None)
+    monkeypatch.setattr("coder.cli.OpenAICompatibleModel",
                         lambda *args, **kwargs: pytest.fail("model started after failed doctor"))
     monkeypatch.chdir(workspace)
     assert main(["-C", str(workspace)]) == 2

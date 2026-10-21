@@ -12,16 +12,16 @@ from typing import Any
 
 import pytest
 
-from study_coder.agent import Agent
-from study_coder.cli import main
-from study_coder.config import Settings, load_settings
-from study_coder.conversation.context import ContextManager, ContextSummary
-from study_coder.conversation.session import load_session_bundle, save_session
-from study_coder.llm import ScriptedLLM
-from study_coder.memory.core import MemoryManager, MemoryStore, WorkingMemory, memory_message
-from study_coder.permissions import DefaultPermissionPolicy
-from study_coder.tools import default_tools
-from study_coder.types import LLMReply, Message, ToolCall, ToolResult
+from coder.agent import Agent
+from coder.cli import main
+from coder.config import Settings, load_settings
+from coder.conversation.context import ContextManager, ContextSummary
+from coder.conversation.session import load_session_bundle, save_session
+from coder.llm import ScriptedLLM
+from coder.memory.core import MemoryManager, MemoryStore, WorkingMemory, memory_message
+from coder.permissions import DefaultPermissionPolicy
+from coder.tools import default_tools
+from coder.types import LLMReply, Message, ToolCall, ToolResult
 
 
 def store_at(root: Path, name: str = "project", maximum: int = 1000) -> MemoryStore:
@@ -241,8 +241,8 @@ def test_cli_memory_management_without_docker(tmp_path: Path, monkeypatch: pytes
     store = store_at(tmp_path)
     workspace = Path(store.workspace)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("STUDY_CODER_WORKSPACE", str(workspace))
+    monkeypatch.setenv("CODER_SANDBOX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CODER_WORKSPACE", str(workspace))
     assert main(["memory", "remember", "--kind", "procedural", "--key", "test",
                  "--content", "python -m unittest"]) == 0
     identifier = json.loads(capsys.readouterr().out)["id"]
@@ -254,10 +254,10 @@ def test_cli_memory_management_without_docker(tmp_path: Path, monkeypatch: pytes
 
 
 def test_memory_config_validation_and_disabled_schema(tmp_path: Path) -> None:
-    settings = load_settings({"STUDY_CODER_WORKSPACE": str(tmp_path),
-                              "STUDY_CODER_MEMORY_ENABLED": "false",
-                              "STUDY_CODER_MEMORY_MAX_CONTEXT_TOKENS": "300",
-                              "STUDY_CODER_MEMORY_TOP_K": "3"})
+    settings = load_settings({"CODER_WORKSPACE": str(tmp_path),
+                              "CODER_MEMORY_ENABLED": "false",
+                              "CODER_MEMORY_MAX_CONTEXT_TOKENS": "300",
+                              "CODER_MEMORY_TOP_K": "3"})
     assert not settings.memory_enabled and settings.memory_top_k == 3
     assert settings.memory_max_context_tokens == 300
     for fields in ({"memory_top_k": True}, {"memory_max_entries": 0}, {"memory_enabled": "true"}):
@@ -268,7 +268,7 @@ def test_memory_config_validation_and_disabled_schema(tmp_path: Path) -> None:
 
 def test_cli_agent_recall_update_and_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """走真正的 CLI 装配与会话落盘，Docker/模型只替换外部边界。"""
-    import study_coder.cli as cli
+    import coder.cli as cli
 
     store = store_at(tmp_path)
     store.remember("semantic", "language", "Use Chinese", load_policy="always")
@@ -281,9 +281,9 @@ def test_cli_agent_recall_update_and_resume(tmp_path: Path, monkeypatch: pytest.
     runtime.skill_catalog = {}
     runtime.export_changes = lambda: {"added": [], "modified": [], "deleted": []}
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("STUDY_CODER_WORKSPACE", store.workspace)
-    monkeypatch.setenv("STUDY_CODER_SANDBOX_STATE_DIR", str(state))
-    monkeypatch.setenv("STUDY_CODER_MEMORY_ENABLED", "true")
+    monkeypatch.setenv("CODER_WORKSPACE", store.workspace)
+    monkeypatch.setenv("CODER_SANDBOX_STATE_DIR", str(state))
+    monkeypatch.setenv("CODER_MEMORY_ENABLED", "true")
     monkeypatch.setattr(cli.DockerRuntime, "start", lambda *args: runtime)
     call = ToolCall("update", "memory_remember", {
         "kind": "semantic", "key": "language", "content": "Use English",

@@ -4,8 +4,8 @@ from types import SimpleNamespace as Obj
 
 import pytest
 
-from study_coder.config import Settings
-from study_coder.llm import (
+from coder.config import Settings
+from coder.llm import (
     ModelProtocolError,
     OpenAICompatibleModel,
     ScriptedLLM,
@@ -14,7 +14,7 @@ from study_coder.llm import (
     normalize_completion,
     to_provider_messages,
 )
-from study_coder.types import Message
+from coder.types import Message
 
 
 def chunk(*, text: str | None = None, calls: list | None = None,
@@ -118,8 +118,8 @@ def test_stream_terminal_marker_survives_usage_only_tail():
 
 
 def test_truncated_summary_is_not_accepted():
-    from study_coder.conversation.context import ContextError, ModelSummarizer
-    from study_coder.types import LLMReply
+    from coder.conversation.context import ContextError, ModelSummarizer
+    from coder.types import LLMReply
 
     model = ScriptedLLM([LLMReply("partial", Message("assistant", "partial"), finish_reason="length")])
     with pytest.raises(ContextError, match="no usable summary"):

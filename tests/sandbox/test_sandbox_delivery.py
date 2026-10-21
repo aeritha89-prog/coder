@@ -2,11 +2,11 @@
 
 import pytest
 
-from study_coder.config import Settings
-from study_coder.sandbox import transfer
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime, cleanup_task
-from study_coder.sandbox.policy import SandboxPolicy
+from coder.config import Settings
+from coder.sandbox import transfer
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime, cleanup_task
+from coder.sandbox.policy import SandboxPolicy
 
 
 def test_export_preflight_names_large_files_and_respects_exclusions(tmp_path, monkeypatch):
@@ -37,7 +37,7 @@ def test_preflight_is_bounded_and_uses_task_exclusions(tmp_path, monkeypatch):
     for index in range(25):
         (tmp_path / f"artifact-{index}.bin").write_bytes(b"xx")
     assert len(transfer.export_issues(tmp_path)) == 21
-    monkeypatch.setenv("STUDY_CODER_EXPORT_EXCLUDE", '["artifact-*.bin"]')
+    monkeypatch.setenv("CODER_EXPORT_EXCLUDE", '["artifact-*.bin"]')
     assert transfer.runtime_export_issues(tmp_path, 1, 1) == []
 
 
@@ -55,9 +55,9 @@ def test_task_home_volume_is_separate_and_cleaned(tmp_path, monkeypatch, fail_st
     policy = SandboxPolicy(state_dir=tmp_path / "state")
     commands = []
     removed = []
-    monkeypatch.setattr("study_coder.sandbox.docker.doctor", lambda _: {"image_id": "sha256:test"})
-    monkeypatch.setattr("study_coder.sandbox.docker._image_skill_catalog", lambda _: {})
-    monkeypatch.setattr("study_coder.sandbox.docker._remove_owned_resource", lambda *args: removed.append(args))
+    monkeypatch.setattr("coder.sandbox.docker.doctor", lambda _: {"image_id": "sha256:test"})
+    monkeypatch.setattr("coder.sandbox.docker._image_skill_catalog", lambda _: {})
+    monkeypatch.setattr("coder.sandbox.docker._remove_owned_resource", lambda *args: removed.append(args))
 
     def control(args, **kwargs):
         commands.append(args)
@@ -65,12 +65,12 @@ def test_task_home_volume_is_separate_and_cleaned(tmp_path, monkeypatch, fail_st
             raise SandboxError("synthetic task start failure")
         return ""
 
-    monkeypatch.setattr("study_coder.sandbox.docker._control", control)
+    monkeypatch.setattr("coder.sandbox.docker._control", control)
     settings = Settings("test", None, None, workspace)
     if fail_start:
         with pytest.raises(SandboxError, match="synthetic"):
             DockerRuntime.start(settings, policy)
-        assert any(kind == "volume" and name.startswith("study-coder-home-") for kind, name, _ in removed)
+        assert any(kind == "volume" and name.startswith("coder-home-") for kind, name, _ in removed)
         return
     runtime = DockerRuntime.start(settings, policy)
     command = next(args for args in commands if args[:2] == ["run", "-d"])

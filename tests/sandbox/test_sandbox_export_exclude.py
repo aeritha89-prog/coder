@@ -11,13 +11,13 @@ from typing import Any
 
 import pytest
 
-from study_coder import cli
-from study_coder.config import Settings
-from study_coder.sandbox.base import SandboxError
-from study_coder.sandbox.docker import DockerRuntime, apply_task, policy_for_task
-from study_coder.sandbox.manifest import load_record, save_record
-from study_coder.sandbox.policy import SandboxPolicy
-from study_coder.sandbox.transfer import filter_snapshot, tar_exclude_patterns
+from coder import cli
+from coder.config import Settings
+from coder.sandbox.base import SandboxError
+from coder.sandbox.docker import DockerRuntime, apply_task, policy_for_task
+from coder.sandbox.manifest import load_record, save_record
+from coder.sandbox.policy import SandboxPolicy
+from coder.sandbox.transfer import filter_snapshot, tar_exclude_patterns
 
 TASK_ID = "1" * 32
 SDK = "toolchain/jdk25"
@@ -78,11 +78,11 @@ def exporter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         def kill(self) -> None:
             self.returncode = 1
 
-    monkeypatch.setattr("study_coder.sandbox.docker._docker_executable", lambda: "docker")
-    monkeypatch.setattr("study_coder.sandbox.docker._control", lambda *a, **k: "")
-    monkeypatch.setattr("study_coder.sandbox.docker._remove_owned_resource", lambda *a: None)
+    monkeypatch.setattr("coder.sandbox.docker._docker_executable", lambda: "docker")
+    monkeypatch.setattr("coder.sandbox.docker._control", lambda *a, **k: "")
+    monkeypatch.setattr("coder.sandbox.docker._remove_owned_resource", lambda *a: None)
     monkeypatch.setattr(DockerRuntime, "_ensure_stopped", lambda self: None)
-    monkeypatch.setattr("study_coder.sandbox.docker.subprocess.Popen", Process)
+    monkeypatch.setattr("coder.sandbox.docker.subprocess.Popen", Process)
     return runtime, commands, payloads
 
 
