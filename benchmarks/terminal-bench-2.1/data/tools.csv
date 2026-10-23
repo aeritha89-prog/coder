@@ -1,0 +1,12 @@
+tool,calls,failures,successes,success_rate
+bash,3123,237,2886,0.9241114313160422
+claim_task,17,0,17,1.0
+complete_task,18,1,17,0.9444444444444444
+create_task,21,4,17,0.8095238095238095
+edit_file,94,11,83,0.8829787234042553
+glob,3,0,3,1.0
+read_file,66,33,33,0.5
+task_list,8,2,6,0.75
+update_task_dependencies,5,0,5,1.0
+write,1,1,0,0.0
+write_file,125,63,62,0.496
